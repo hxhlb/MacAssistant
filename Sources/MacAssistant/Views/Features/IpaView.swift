@@ -205,10 +205,9 @@ struct InjectDylibTab: View {
     @State private var bundleID = ""
     @State private var shortVersion = ""
     @State private var buildVersion = ""
-    @State private var minimumOSVersion = ""
-    @State private var randomizeBundleIDForPPQ = false
+    @State private var minimumOSVersion = InjectionMetadataChanges.defaultMinimumOSVersion
     @State private var outputName = ""
-    @State private var enableFileSharing = false
+    @State private var enableFileSharing = true
     @State private var repairWhiteIcon = false
     @State private var removeVOIPBackgroundMode = false
     @State private var removeURLSchemes = false
@@ -698,8 +697,9 @@ struct InjectDylibTab: View {
                     TextField(L("ipaview.buildVersion"), text: $buildVersion).textFieldStyle(.roundedBorder)
                     TextField(L("ipaview.minimumOS"), text: $minimumOSVersion).textFieldStyle(.roundedBorder)
                 }
-                Toggle(L("ipaview.ppqRandomize"), isOn: $randomizeBundleIDForPPQ)
-                Text(L("ipaview.ppqRandomize.hint"))
+                Text(L("workbench.recipe.bundleID.note"))
+                    .font(.caption).foregroundStyle(.secondary)
+                Text(L("workbench.recipe.minimumOS.note"))
                     .font(.caption).foregroundStyle(.secondary)
                 TextField(L("ipaview.outputName"), text: $outputName).textFieldStyle(.roundedBorder)
                 IpaMultiFilePickerButton(
@@ -849,16 +849,13 @@ struct InjectDylibTab: View {
         let signing: InjectionSigningMode
         if developerSigning {
             guard let identity = selectedIdentity else { throw SigningError.noIdentitySelected }
-            let bundleIDs = signingBundleIDs
-            let missing = bundleIDs.filter { profilesByBundleID[$0] == nil }
-            guard !bundleIDs.isEmpty, missing.isEmpty else {
-                throw SigningError.missingProfileMappings(missing.isEmpty ? bundleIDs : missing)
+            guard !profilesByBundleID.isEmpty else {
+                throw SigningError.missingProfileMappings(["mobileprovision"])
             }
-            let activeProfiles = profilesByBundleID.filter { bundleIDs.contains($0.key) }
             signing = .realDevice(RealDeviceSigningRecipe(
                 identityID: identity.id,
                 identityName: identity.name,
-                profilesByBundleID: activeProfiles
+                profilesByBundleID: profilesByBundleID
             ))
         } else {
             switch signMethod {
@@ -881,8 +878,7 @@ struct InjectDylibTab: View {
                 enableFileSharing: enableFileSharing,
                 repairWhiteIcon: repairWhiteIcon,
                 removeVOIPBackgroundMode: removeVOIPBackgroundMode,
-                removeURLSchemes: removeURLSchemes,
-                randomizeBundleIDForPPQ: randomizeBundleIDForPPQ
+                removeURLSchemes: removeURLSchemes
             ),
             components: InjectionComponentPolicy(
                 watch: removeWatch ? .remove : .preserve,
@@ -985,10 +981,9 @@ struct InjectDylibTab: View {
         bundleID = ""
         shortVersion = ""
         buildVersion = ""
-        minimumOSVersion = ""
-        randomizeBundleIDForPPQ = false
+        minimumOSVersion = InjectionMetadataChanges.defaultMinimumOSVersion
         outputName = ""
-        enableFileSharing = false
+        enableFileSharing = true
         repairWhiteIcon = false
         removeVOIPBackgroundMode = false
         removeURLSchemes = false
@@ -1057,10 +1052,9 @@ struct InjectDylibTab: View {
         if buildVersion.nilIfBlank == nil {
             buildVersion = plist["CFBundleVersion"] as? String ?? ""
         }
-        if minimumOSVersion.nilIfBlank == nil {
-            minimumOSVersion = (plist["MinimumOSVersion"] as? String)
-                ?? (plist["LSMinimumSystemVersion"] as? String)
-                ?? ""
+        if minimumOSVersion.nilIfBlank == nil
+            || minimumOSVersion == InjectionMetadataChanges.defaultMinimumOSVersion {
+            minimumOSVersion = InjectionMetadataChanges.defaultMinimumOSVersion
         }
         if outputName.nilIfBlank == nil, let inputURL {
             let suffix = inputMode == .macOSApp ? "app" : "ipa"

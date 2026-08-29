@@ -15,19 +15,15 @@ struct MemoryView: View {
     @State private var developerOperationsExpanded = false
 
     private var filteredProcesses: [ProcessMemoryInfo] {
-        guard !query.isEmpty else { return processes }
-        return processes.filter {
-            $0.name.localizedCaseInsensitiveContains(query)
-                || String($0.pid).contains(query)
-        }
+        processes.filter { $0.matches(query) }
     }
 
     private var selectedProcess: ProcessMemoryInfo? {
         processes.first { $0.pid == selectedPID }
     }
 
-    private var totalRSS: UInt64 {
-        filteredProcesses.reduce(0) { $0 + $1.rssBytes }
+    private var totalMemory: UInt64 {
+        filteredProcesses.reduce(0) { $0 + $1.memoryBytes }
     }
 
     var body: some View {
@@ -59,7 +55,7 @@ struct MemoryView: View {
             return Alert(
                 title: Text(force ? L("memoryview.alert.forceQuit") : L("memoryview.alert.quit")),
                 message: Text(
-                    L("memoryview.alert.process", pending.process.name, Int(pending.process.pid))
+                    L("memoryview.alert.process", pending.process.displayName, Int(pending.process.pid))
                     + "\n"
                     + (force
                        ? L("memoryview.alert.kill.detail")
@@ -115,17 +111,19 @@ struct MemoryView: View {
                     }
                     .accessibilityElement(children: .contain)
 
-                    if let percent = snapshot.pressureFreePercent {
-                        ProgressView(value: Double(100 - percent), total: 100)
+                    if snapshot.physical > 0 {
+                        ProgressView(value: snapshot.usedFraction, total: 1)
                             .tint(pressureColor(snapshot.pressureLevel))
                             .accessibilityLabel(L("memoryview.pressure.accessibility"))
-                            .accessibilityValue(L("memoryview.pressure.value", snapshot.pressureLevel.label, percent))
+                            .accessibilityValue(
+                                L(
+                                    "memoryview.pressure.value",
+                                    snapshot.pressureLevel.label,
+                                    snapshot.usedPercent
+                                )
+                            )
                     }
                 }
-
-                Text(L("memoryview.explanation"))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
 
                 HStack {
                     Button {
@@ -133,8 +131,8 @@ struct MemoryView: View {
                         if let process = processes.first {
                             statusText = L(
                                 "memoryview.topProcess",
-                                process.name,
-                                MemoryService.formatBytes(process.rssBytes)
+                                process.displayName,
+                                MemoryService.formatBytes(process.memoryBytes)
                             )
                         }
                     } label: {
@@ -176,7 +174,7 @@ struct MemoryView: View {
                     Text("\(filteredProcesses.count)")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
-                    Text(L("memoryview.processes.total", MemoryService.formatBytes(totalRSS)))
+                    Text(L("memoryview.processes.total", MemoryService.formatBytes(totalMemory)))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -260,7 +258,7 @@ struct MemoryView: View {
                 }.value
                 statusText = L(
                     "memoryview.signalSent",
-                    process.name,
+                    process.displayName,
                     Int(process.pid),
                     signal == .terminate ? "SIGTERM" : "SIGKILL"
                 )
@@ -333,17 +331,17 @@ private struct ProcessMemoryRow: View {
                 .frame(width: 24, height: 24)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
-                Text(process.name)
+                Text(process.displayName)
                     .lineLimit(1)
-                Text("PID \(process.pid)")
+                Text(processRowSubtitle(process))
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Text(MemoryService.formatBytes(process.rssBytes))
+            Text(MemoryService.formatBytes(process.memoryBytes))
                 .font(.callout.monospacedDigit())
             if physicalMemory > 0 {
-                Text(String(format: "%.1f%%", Double(process.rssBytes) / Double(physicalMemory) * 100))
+                Text(String(format: "%.1f%%", Double(process.memoryBytes) / Double(physicalMemory) * 100))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(width: 48, alignment: .trailing)
@@ -353,10 +351,17 @@ private struct ProcessMemoryRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(L(
             "memoryview.row.accessibility",
-            process.name,
+            process.displayName,
             Int(process.pid),
-            MemoryService.formatBytes(process.rssBytes)
+            MemoryService.formatBytes(process.memoryBytes)
         ))
+    }
+
+    private func processRowSubtitle(_ process: ProcessMemoryInfo) -> String {
+        if process.displayName.compare(process.name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+            return "PID \(process.pid)"
+        }
+        return "\(process.name) · PID \(process.pid)"
     }
 }
 

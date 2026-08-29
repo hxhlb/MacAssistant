@@ -37,7 +37,7 @@
 
 ## Загрузка
 
-[Releases](https://github.com/iosrxwy/MacAssistant/releases) · macOS 13+. Эта бета подписана **ad-hoc и не нотаризована**. Если macOS блокирует запуск: откройте приложение один раз, затем **Системные настройки → Конфиденциальность и безопасность → Всё равно открыть**.
+[Releases](https://github.com/iosrxwy/MacAssistant/releases) · macOS 13+. Эта версия 1.0 подписана **ad-hoc и не нотаризована**. Если macOS блокирует запуск: откройте приложение один раз, затем **Системные настройки → Конфиденциальность и безопасность → Всё равно открыть**.
 
 [X @iOSRXWY](https://x.com/iOSRXWY) · [Telegram](https://t.me/iosrxwy)
 
@@ -56,7 +56,7 @@ cd MacAssistant
 </p>
 
 <p align="center">
-  <img src="https://progress-bar.xyz/1/?scale=100&title=goal&width=420&color=0A84FF&suffix=%20/%20100" alt="Star goal: 1 / 100">
+  <img src="https://progress-bar.xyz/dynamic/json/?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fiosrxwy%2FMacAssistant&query=%24.stargazers_count&scale=100&title=goal&width=420&color=0A84FF&suffix=%20/%20100&cache=3600" alt="Star goal">
 </p>
 
 <p align="center">

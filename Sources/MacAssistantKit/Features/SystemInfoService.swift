@@ -44,12 +44,16 @@ public enum SystemInfoService {
                               "cpu.fill"))
 
         let total = pi.physicalMemory
-        items.append(InfoItem(L("sysinfo.memory.total"), FileSystemHelper.humanReadableSize(Int64(total)), "memorychip"))
+        items.append(InfoItem(L("sysinfo.memory.total"), MemoryService.formatBytes(total), "memorychip"))
         items.append(InfoItem(L("sysinfo.uptime"), formatUptime(pi.systemUptime), "clock"))
 
         // 内存使用
         let mem = memoryUsage(total: total)
-        items.append(InfoItem(L("sysinfo.memory.used"), "\(FileSystemHelper.humanReadableSize(Int64(mem.used))) / \(FileSystemHelper.humanReadableSize(Int64(total)))", "gauge.with.dots.needle.67percent"))
+        items.append(InfoItem(
+            L("sysinfo.memory.used"),
+            "\(MemoryService.formatBytes(mem.used)) / \(MemoryService.formatBytes(total))",
+            "gauge.with.dots.needle.67percent"
+        ))
 
         // 磁盘
         let disk = diskUsage()
@@ -64,7 +68,7 @@ public enum SystemInfoService {
         return SystemSnapshot(
             items: items,
             memoryUsedFraction: total > 0 ? Double(mem.used) / Double(total) : 0,
-            memoryUsedText: "\(FileSystemHelper.humanReadableSize(Int64(mem.used))) / \(FileSystemHelper.humanReadableSize(Int64(total)))",
+            memoryUsedText: "\(MemoryService.formatBytes(mem.used)) / \(MemoryService.formatBytes(total))",
             diskUsedFraction: disk.total > 0 ? Double(disk.used) / Double(disk.total) : 0,
             diskUsedText: "\(FileSystemHelper.humanReadableSize(disk.used)) / \(FileSystemHelper.humanReadableSize(disk.total))",
             batteryLevel: battery.level,

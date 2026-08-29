@@ -296,6 +296,9 @@ final class InjectionPlanTests: XCTestCase {
             customOutputName: "Audited.app"
         )
         let output = root.appendingPathComponent("Result.app")
+        let savedLanguage = LocalizationSettings.override
+        LocalizationSettings.override = .simplifiedChinese
+        defer { LocalizationSettings.override = savedLanguage }
         let streamed = LogCollector()
         let result = try IpaInjectionWorkflow.execute(
             plan,
@@ -304,6 +307,30 @@ final class InjectionPlanTests: XCTestCase {
         )
         XCTAssertEqual(streamed.snapshot, result.log)
         XCTAssertTrue(result.audit.passed)
+        XCTAssertTrue(result.log.contains(InjectionProgressLog.appCopySucceeded()))
+        XCTAssertTrue(result.log.contains(InjectionProgressLog.copyDylibSucceeded("One.dylib")))
+        XCTAssertTrue(result.log.contains(InjectionProgressLog.injectStart("One.dylib")))
+        XCTAssertTrue(result.log.contains(InjectionProgressLog.injectSucceeded("One.dylib")))
+        XCTAssertTrue(result.log.contains(InjectionProgressLog.copyDylibSucceeded("Two.dylib")))
+        XCTAssertTrue(result.log.contains(InjectionProgressLog.injectStart("Two.dylib")))
+        XCTAssertTrue(result.log.contains(InjectionProgressLog.injectSucceeded("Two.dylib")))
+        XCTAssertTrue(result.log.contains(InjectionProgressLog.fileSharingEnabled()))
+        XCTAssertTrue(result.log.contains(InjectionProgressLog.appPackaged(output.path)))
+        XCTAssertTrue(result.log.contains(InjectionProgressLog.clearedCache()))
+        XCTAssertFalse(result.log.contains(InjectionProgressLog.unzipStart()))
+        XCTAssertFalse(result.log.contains(InjectionProgressLog.zipStart()))
+        XCTAssertFalse(result.log.contains(InjectionProgressLog.removedPlugIns()))
+        XCTAssertFalse(result.log.contains(InjectionProgressLog.removedWatch()))
+        XCTAssertFalse(result.log.contains { $0.contains("删除Assets.car") })
+        XCTAssertFalse(result.log.contains(InjectionProgressLog.discoveredDependencies("One.dylib")))
+        XCTAssertLessThan(
+            result.log.firstIndex(of: InjectionProgressLog.copyDylibSucceeded("One.dylib"))!,
+            result.log.firstIndex(of: InjectionProgressLog.injectStart("One.dylib"))!
+        )
+        XCTAssertLessThan(
+            result.log.firstIndex(of: InjectionProgressLog.injectStart("One.dylib"))!,
+            result.log.firstIndex(of: InjectionProgressLog.injectSucceeded("One.dylib"))!
+        )
         XCTAssertEqual(result.audit.entries.count, 2)
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: output.appendingPathComponent("Frameworks/One.dylib").path
@@ -322,6 +349,71 @@ final class InjectionPlanTests: XCTestCase {
         )
         XCTAssertTrue(frameworkCommands.allSatisfy {
             $0.commands.contains { $0.path.hasSuffix("/Two.dylib") && $0.weak }
+        })
+    }
+
+    func testWorkbenchDefaultInjectsMainAndDoesNotAuditProtobufLite() throws {
+        for tool in [ExternalTool.clang, .otool] where !tool.isAvailable {
+            throw XCTSkip("缺少 \(tool.commandName)")
+        }
+        let root = try FileSystemHelper.makeTemporaryDirectory(prefix: "wb-main-only")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let app = root.appendingPathComponent("WeChat.app")
+        let framework = app.appendingPathComponent("Frameworks/ProtobufLite.framework")
+        try FileManager.default.createDirectory(at: framework, withIntermediateDirectories: true)
+        try writePlist(to: app, executable: "WeChat")
+        try writePlist(to: framework, executable: "ProtobufLite")
+
+        let source = root.appendingPathComponent("source.c")
+        try "int main(void) { return 0; }\n".write(to: source, atomically: true, encoding: .utf8)
+        let main = app.appendingPathComponent("WeChat")
+        let proto = framework.appendingPathComponent("ProtobufLite")
+        XCTAssertTrue(try Shell.run(
+            ExternalTool.clang.path!,
+            ["-o", main.path, source.path, "-Wl,-headerpad,0x1000"]
+        ).succeeded)
+        XCTAssertTrue(try Shell.run(
+            ExternalTool.clang.path!,
+            ["-dynamiclib", "-o", proto.path, source.path, "-Wl,-headerpad,0x1000"]
+        ).succeeded)
+
+        let plugin = root.appendingPathComponent("MMlibAntiDetect.dylib")
+        XCTAssertTrue(try Shell.run(
+            ExternalTool.clang.path!,
+            ["-dynamiclib", "-o", plugin.path, source.path]
+        ).succeeded)
+
+        let recipe = InjectionRecipe(name: "default")
+        XCTAssertEqual(recipe.injectionHost, .automatic)
+        let plan = try WorkspacePlanAssembler.makePlan(.init(
+            input: .app(app),
+            orderedDylibs: [plugin],
+            recipe: recipe,
+            signing: .none,
+            customOutputName: "Out.app"
+        ))
+        XCTAssertEqual(plan.items.map(\.target), [.mainExecutable])
+
+        let output = root.appendingPathComponent("Result.app")
+        let result = try IpaInjectionWorkflow.execute(plan, outputURL: output)
+        XCTAssertTrue(result.audit.passed)
+        XCTAssertEqual(result.audit.entries.map(\.targetRelativePath), ["WeChat"])
+        XCTAssertEqual(
+            result.audit.entries.map(\.loadPath),
+            ["@executable_path/Frameworks/MMlibAntiDetect.dylib"]
+        )
+
+        let mainLoads = try DylibInjector.inspectLoadCommands(fileAt: output.appendingPathComponent("WeChat"))
+        XCTAssertTrue(mainLoads.allSatisfy {
+            $0.commands.contains { $0.path == "@executable_path/Frameworks/MMlibAntiDetect.dylib" }
+        })
+
+        let protoLoads = try DylibInjector.inspectLoadCommands(
+            fileAt: output.appendingPathComponent("Frameworks/ProtobufLite.framework/ProtobufLite")
+        )
+        XCTAssertTrue(protoLoads.allSatisfy { slice in
+            !slice.commands.contains { $0.path.contains("MMlibAntiDetect.dylib") }
         })
     }
 
@@ -402,6 +494,33 @@ final class InjectionPlanTests: XCTestCase {
         XCTAssertEqual(changes.resolvingBundleID(current: "com.demo.app").bundleID, "com.demo.app.zz99")
     }
 
+    func testFileSharingDefaultsOnAndKeepsExplicitOff() throws {
+        XCTAssertTrue(InjectionMetadataChanges().enableFileSharing)
+        XCTAssertTrue(InjectionRecipe(name: "").metadata.enableFileSharing)
+        XCTAssertFalse(InjectionMetadataChanges(enableFileSharing: false).enableFileSharing)
+
+        let missing = try JSONDecoder().decode(InjectionMetadataChanges.self, from: Data("{}".utf8))
+        XCTAssertTrue(missing.enableFileSharing)
+
+        let off = try JSONDecoder().decode(
+            InjectionMetadataChanges.self,
+            from: Data(#"{"enableFileSharing":false}"#.utf8)
+        )
+        XCTAssertFalse(off.enableFileSharing)
+    }
+
+    func testWorkbenchDefaultsFillMinimumOSOnlyWhenMissing() {
+        XCTAssertEqual(
+            InjectionMetadataChanges().resolvingWorkbenchDefaults().minimumOSVersion,
+            InjectionMetadataChanges.defaultMinimumOSVersion
+        )
+        XCTAssertEqual(
+            InjectionMetadataChanges(minimumOSVersion: "16.0").resolvingWorkbenchDefaults().minimumOSVersion,
+            "16.0"
+        )
+        XCTAssertEqual(InjectionMetadataChanges.defaultMinimumOSVersion, "14.0")
+    }
+
     func testInfoPlistMetadataApplierWritesVersionAndMinimumOS() {
         var plist: [String: Any] = [
             "CFBundleIdentifier": "com.demo.app",
@@ -433,5 +552,35 @@ final class InjectionPlanTests: XCTestCase {
         XCTAssertTrue(decoded.enableFileSharing)
         XCTAssertFalse(decoded.randomizeBundleIDForPPQ)
         XCTAssertNil(decoded.shortVersion)
+    }
+
+    func testAppIconRepairStripsAssetCatalogNameAndUsesLoosePNGs() throws {
+        let dir = try FileSystemHelper.makeTemporaryDirectory(prefix: "icon-repair")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let app = dir.appendingPathComponent("WeChat.app")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        try Data().write(to: app.appendingPathComponent("AppIcon60x60@2x.png"))
+        try Data().write(to: app.appendingPathComponent("AppIcon76x76@2x~ipad.png"))
+        try Data().write(to: app.appendingPathComponent("readme.txt"))
+        XCTAssertEqual(
+            AppIconRepair.pngBasenames(in: app),
+            ["AppIcon60x60", "AppIcon76x76~ipad"]
+        )
+
+        var plist: [String: Any] = [
+            "CFBundleIconName": "AppIcon",
+            "CFBundleIcons": [
+                "CFBundlePrimaryIcon": [
+                    "CFBundleIconName": "AppIcon",
+                    "CFBundleIconFiles": ["AppIcon60x60"]
+                ]
+            ]
+        ]
+        AppIconRepair.apply(to: &plist, extraFiles: AppIconRepair.pngBasenames(in: app))
+        XCTAssertNil(plist["CFBundleIconName"])
+        XCTAssertEqual(plist["CFBundleIconFiles"] as? [String], ["AppIcon60x60", "AppIcon76x76~ipad"])
+        let primary = (plist["CFBundleIcons"] as? [String: Any])?["CFBundlePrimaryIcon"] as? [String: Any]
+        XCTAssertNil(primary?["CFBundleIconName"])
+        XCTAssertEqual(primary?["CFBundleIconFiles"] as? [String], ["AppIcon60x60", "AppIcon76x76~ipad"])
     }
 }

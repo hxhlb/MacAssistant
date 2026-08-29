@@ -37,7 +37,7 @@
 
 ## Descarga
 
-[Releases](https://github.com/iosrxwy/MacAssistant/releases) · macOS 13+. Esta beta es **ad-hoc y no está notarizada**. Si macOS la bloquea: ábrela una vez, luego **Ajustes del Sistema → Privacidad y seguridad → Abrir de todos modos**.
+[Releases](https://github.com/iosrxwy/MacAssistant/releases) · macOS 13+. Esta versión 1.0 es **ad-hoc y no está notarizada**. Si macOS la bloquea: ábrela una vez, luego **Ajustes del Sistema → Privacidad y seguridad → Abrir de todos modos**.
 
 [X @iOSRXWY](https://x.com/iOSRXWY) · [Telegram](https://t.me/iosrxwy)
 
@@ -56,7 +56,7 @@ cd MacAssistant
 </p>
 
 <p align="center">
-  <img src="https://progress-bar.xyz/1/?scale=100&title=goal&width=420&color=0A84FF&suffix=%20/%20100" alt="Star goal: 1 / 100">
+  <img src="https://progress-bar.xyz/dynamic/json/?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fiosrxwy%2FMacAssistant&query=%24.stargazers_count&scale=100&title=goal&width=420&color=0A84FF&suffix=%20/%20100&cache=3600" alt="Star goal">
 </p>
 
 <p align="center">

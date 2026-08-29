@@ -270,7 +270,7 @@ public enum AppleIDSigningService {
         }
     }
 
-    /// 工作台 / 注入计划：登录（或复用会话）→ 选团队 → 申请/复用证书 → 刷 profile → 由内向外重签。
+    /// 工作台 / 注入计划：登录 → 选团队 → 申请证书 / profile → 手机 IPA 交给 zsign。
     public static func applyToApp(
         _ app: URL,
         recipe: AppleIDSigningRecipe,

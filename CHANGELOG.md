@@ -2,6 +2,23 @@
 
 All notable changes to MacAssistant are recorded here.
 
+## [Unreleased]
+
+## [1.0.1] - 2026-08-29
+
+First official release after `v1.0.0-beta.4`. Ad-hoc signed; not notarized by Apple. Chinese: [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
+
+- Injection is handled in the workbench. An IPA, plugins, certificate, and profile can be selected together. Plugins are injected into the main executable by default; ProtobufLite must be chosen explicitly.
+- Signing is optional: none, Apple ID, or P12. A matching p12 and profile uses certificate signing. The password is shown in clear text and defaults to `1`. iPhone IPAs use zsign; Mac apps still use `codesign`.
+- Output is `*.injected.ipa` in the same folder as the original IPA.
+- Display name, bundle ID, and version can be edited. Files sharing, URL-scheme removal, and deletion of Watch, extensions, or App Clips are supported.
+- WeChat IPAs receive a dedicated dark-icon fix.
+- Memory and dashboard values match Activity Monitor.
+- Cleanup no longer reports an inaccessible folder as empty.
+- App Store download has been removed. Install, extract, inject, and resign remain.
+
+If the first launch is blocked: **System Settings → Privacy & Security → Open Anyway**. See [README](README.md#first-launch-blocked-by-macos).
+
 ## [1.0.0-beta.4] - 2026-08-19
 
 Patch over 1.0.0-beta.3. Users on 1.0.0-beta.3 can pick this up from **About → Check for updates**.
@@ -89,6 +106,7 @@ First public prerelease.
 
 This prerelease is ad-hoc signed and not notarized. macOS may block the first launch. Open the app once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. Full steps: [README](README.md#first-launch-blocked-by-macos).
 
+[1.0.1]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.1
 [1.0.0-beta.4]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.0-beta.4
 [1.0.0-beta.3]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.0-beta.3
 [1.0.0-beta.2]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.0-beta.2

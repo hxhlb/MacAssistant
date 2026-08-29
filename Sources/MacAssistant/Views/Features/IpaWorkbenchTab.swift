@@ -69,7 +69,6 @@ struct IpaWorkbenchTab: View {
     @State private var busy = false
     @State private var log = ""
     @State private var ok: Bool?
-    @State private var identities: [SigningIdentity] = []
     @State private var appleID = ""
     @State private var appleIDPassword = ""
     @State private var appleIDTwoFactor = ""
@@ -78,6 +77,7 @@ struct IpaWorkbenchTab: View {
     @State private var workbenchManualName = ""
     @State private var appleIDBusy = false
     @State private var appleIDMessage = ""
+    @State private var workbenchCertificateMessage = ""
 
     private var toolVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? AppVersionSource.fallbackVersion
@@ -91,7 +91,10 @@ struct IpaWorkbenchTab: View {
             if !controller.unrecognized.isEmpty { unrecognizedCard }
             if !controller.plugins.isEmpty { pluginsCard }
             if !controller.frameworks.isEmpty || !controller.bundles.isEmpty { resourcesCard }
-            if controller.snapshot != nil { fileAccessCard; recipeCard; signingCard }
+            if controller.snapshot != nil {
+                recipeCard
+                signingCard
+            }
             if controller.preflightReport != nil { preflightCard }
             if controller.snapshot != nil { executeCard }
             if controller.artifactState != nil { resultCard }
@@ -114,7 +117,6 @@ struct IpaWorkbenchTab: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .task {
-            if identities.isEmpty { identities = SigningService.identities() }
             restoreWorkbenchAppleID()
             refreshWorkbenchDevices()
         }
@@ -144,20 +146,39 @@ struct IpaWorkbenchTab: View {
                     style: StrokeStyle(lineWidth: 1.5, dash: [7])
                 )
         }
-        .onDrop(of: [UTType.fileURL.identifier], isTargeted: $dropTargeted) { providers in
-            for provider in providers {
-                provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
-                    guard let data, let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
-                    Task { @MainActor in route([url]) }
-                }
-            }
-            return true
+        .fileURLsDropTarget(isTargeted: $dropTargeted, onDrop: route)
+        .onTapGesture { pickFiles() }
+        .onHover { hovering in
+            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
         }
+        .help(L("workbench.dropZone.help"))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(L("workbench.dropZone.title"))
+        .accessibilityHint(L("workbench.dropZone.help"))
+        .accessibilityAction { pickFiles() }
+    }
+
+    /// 点击虚线框时弹出访达选择器。可多选，目录型包(.app / .framework / .bundle)也能选。
+    private func pickFiles() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowedContentTypes = [.item]
+        panel.allowsOtherFileTypes = true
+        panel.prompt = L("theme.chooseFile")
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        route(panel.urls)
     }
 
     /// 把拖入的一批 URL 分类并路由:目标包建快照、DEB 后台扫描并过适格性、其余同步分桶。
+    /// 凑齐 p12 + 描述文件后密码空着就预填 1，可改。
     private func route(_ urls: [URL]) {
         let (targets, debs) = controller.ingestSimpleInputs(urls)
+        if controller.hasCertificateSideloadPair,
+           controller.developerCertificatePassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            controller.developerCertificatePassword = SigningService.defaultDeveloperCertificatePassword
+        }
         for target in targets { ingestTarget(target) }
         for deb in debs { ingestDeb(deb) }
     }
@@ -174,13 +195,17 @@ struct IpaWorkbenchTab: View {
                     }
                 }.value
                 controller.adoptSnapshot(snapshot)
-                let context = try await Task.detached { () -> (TweakFilterTargetIdentity?, [String]) in
+                let context = try await Task.detached { () -> (TweakFilterTargetIdentity?, [String], AppBundleMetadataSummary?) in
                     let session = try InjectionTargetDiscovery.open(snapshot.injectionInput)
                     let identity = try? TweakFilterService.targetIdentity(forAppAt: session.appURL)
                     let required = (try? SigningService.profileBundleIDs(in: session.appURL)) ?? []
-                    return (identity, required)
+                    let summary = try? AppBundleMetadataSummary.read(from: session.appURL)
+                    return (identity, required, summary)
                 }.value
                 controller.applyTargetContext(identity: context.0, requiredBundleIDs: context.1)
+                if let summary = context.2 {
+                    controller.applySourceMetadata(summary)
+                }
                 ok = true
                 log = L("workbench.ingest.snapshotDone")
             } catch {
@@ -232,27 +257,17 @@ struct IpaWorkbenchTab: View {
                     Text(L("workbench.target.requiredProfiles", controller.requiredProfileBundleIDs.count))
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                macOSAccessGuidance
             }
         }
     }
 
-    /// macOS 侧文件访问引导。与 iOS 产物能力(由 profile / entitlements 决定)是两码事。
-    private var macOSAccessGuidance: some View {
-        DisclosureGroup(L("ipaview.access.title")) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(L("ipaview.access.detail"))
-                HStack {
-                    Button(L("ipaview.access.filesAndFolders")) {
-                        openPrivacySettings(anchor: "Privacy_FilesAndFolders")
-                    }
-                    Button(L("ipaview.access.fullDisk")) {
-                        openPrivacySettings(anchor: "Privacy_AllFiles")
-                    }
-                }
-                Text(L("workbench.permission.iosNote"))
-            }
-            .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
+    private func hostLabel(_ choice: PreferredInjectionHost.Choice) -> String {
+        switch choice {
+        case .automatic: return L("workbench.host.automatic")
+        case .preferredFramework: return L("workbench.host.preferredFramework")
+        case .protobufLite3: return "ProtobufLite3"
+        case .protobufLite2: return "ProtobufLite2"
+        case .protobufLite: return "ProtobufLite"
         }
     }
 
@@ -292,61 +307,21 @@ struct IpaWorkbenchTab: View {
         }
     }
 
-    // MARK: - 插件与主 tweak 选择
+    // MARK: - 插件(默认全部注入)
 
     private var pluginsCard: some View {
         Card {
             VStack(alignment: .leading, spacing: 10) {
                 Text(L("workbench.section.plugins")).font(.headline)
-                Text(L("workbench.plugins.selectMain")).font(.caption).foregroundStyle(.secondary)
+                Text(L("workbench.plugins.injectAll")).font(.caption).foregroundStyle(.secondary)
+                Text(L("workbench.host.note")).font(.caption).foregroundStyle(.secondary)
                 ForEach(controller.plugins) { plugin in
                     pluginRow(plugin)
                 }
-                if controller.selectedMainPlugin != nil { filterEvaluationView }
-            }
-        }
-    }
-
-    private func pluginRow(_ plugin: WorkbenchPlugin) -> some View {
-        let isMain = controller.selectedMainPluginID == plugin.id
-        return HStack(spacing: 8) {
-            Button {
-                controller.selectedMainPluginID = plugin.id
-                controller.acknowledgedFilterMismatch = false
-            } label: {
-                Image(systemName: isMain ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(isMain ? Color.accentColor : .secondary)
-            }
-            .buttonStyle(.borderless)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(plugin.displayName).font(.footnote)
-                    .lineLimit(1).truncationMode(.middle)
-                if let deb = plugin.sourceDebName {
-                    Text(L("workbench.plugin.source", deb)).font(.caption2).foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-            if isMain { Text(L("workbench.plugin.main")).font(.caption2).foregroundStyle(Color.accentColor) }
-        }
-        .padding(8)
-        .insetSurfaceBackground(RoundedRectangle(cornerRadius: 8), legacyFill: .primary.opacity(isMain ? 0.08 : 0.03))
-    }
-
-    @ViewBuilder
-    private var filterEvaluationView: some View {
-        if let choice = controller.mainTweakChoice {
-            Divider()
-            switch choice.overall {
-            case .match:
-                Label(L("workbench.filter.match"), systemImage: "checkmark.seal")
-                    .font(.footnote).foregroundStyle(.green)
-            case .indeterminate:
-                Label(L("workbench.filter.indeterminate"), systemImage: "questionmark.circle")
-                    .font(.footnote).foregroundStyle(.secondary)
-            case .mismatch:
-                VStack(alignment: .leading, spacing: 6) {
-                    Label(L("workbench.filter.mismatch"), systemImage: "exclamationmark.triangle")
-                        .font(.footnote).foregroundStyle(.orange)
+                if controller.targetIdentity == nil {
+                    Text(L("workbench.filter.pendingTarget")).font(.caption).foregroundStyle(.secondary)
+                } else if controller.pluginChoices.contains(where: { $0.choice.overall == .mismatch }) {
+                    Divider()
                     Toggle(isOn: $controller.acknowledgedFilterMismatch) {
                         Text(L("workbench.filter.ackDetail")).font(.caption)
                     }
@@ -354,8 +329,57 @@ struct IpaWorkbenchTab: View {
                     .foregroundStyle(.orange)
                 }
             }
-        } else {
-            Text(L("workbench.filter.pendingTarget")).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func pluginRow(_ plugin: WorkbenchPlugin) -> some View {
+        let enabled = !controller.disabledPluginIDs.contains(plugin.id)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Toggle("", isOn: Binding(
+                    get: { enabled },
+                    set: { controller.setPluginEnabled(plugin.id, $0) }
+                ))
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(plugin.displayName).font(.footnote)
+                        .lineLimit(1).truncationMode(.middle)
+                    if let deb = plugin.sourceDebName {
+                        Text(L("workbench.plugin.source", deb)).font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                pluginFilterBadge(plugin)
+            }
+            Picker(L("workbench.host.title"), selection: Binding(
+                get: { controller.injectionHost(for: plugin) },
+                set: { controller.setPluginInjectionHost(plugin.id, $0) }
+            )) {
+                ForEach(PreferredInjectionHost.Choice.allCases, id: \.self) { choice in
+                    Text(hostLabel(choice)).tag(choice)
+                }
+            }
+            .pickerStyle(.menu)
+            .disabled(!enabled)
+            .font(.caption)
+        }
+        .padding(8)
+        .opacity(enabled ? 1 : 0.45)
+        .insetSurfaceBackground(RoundedRectangle(cornerRadius: 8), legacyFill: .primary.opacity(enabled ? 0.06 : 0.03))
+    }
+
+    @ViewBuilder
+    private func pluginFilterBadge(_ plugin: WorkbenchPlugin) -> some View {
+        if let choice = controller.choice(for: plugin) {
+            switch choice.overall {
+            case .match:
+                Text(L("workbench.filter.matchShort")).font(.caption2).foregroundStyle(.green)
+            case .indeterminate:
+                Text(L("workbench.filter.indeterminateShort")).font(.caption2).foregroundStyle(.secondary)
+            case .mismatch:
+                Text(L("workbench.filter.mismatchShort")).font(.caption2).foregroundStyle(.orange)
+            }
         }
     }
 
@@ -370,45 +394,68 @@ struct IpaWorkbenchTab: View {
         }
     }
 
-    // MARK: - 文件访问行为(macOS 侧,recipe 的一部分)
-
-    private var fileAccessCard: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(L("workbench.section.fileAccess")).font(.headline)
-                Picker(L("workbench.section.fileAccess"), selection: $controller.recipe.fileAccessBehavior) {
-                    Text(L("workbench.fileAccess.prompt")).tag(FileAccessBehavior.prompt)
-                    Text(L("workbench.fileAccess.require")).tag(FileAccessBehavior.require)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 320)
-                Text(L("workbench.fileAccess.note")).font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    // MARK: - Recipe 保存 / 载入(工作项 3)
+    // MARK: - 预设开关(写入 recipe,可保存 / 载入)
 
     private var recipeCard: some View {
         Card {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 Text(L("workbench.section.recipe")).font(.headline)
                 Text(L("workbench.recipe.note")).font(.caption).foregroundStyle(.secondary)
-                TextField(L("ipaview.shortVersion"), text: Binding(
-                    get: { controller.recipe.metadata.shortVersion ?? "" },
-                    set: { controller.recipe.metadata.shortVersion = $0.nilIfBlank }
-                ))
+
+                TextField(L("ipaview.displayName"), text: metadataBinding(\.displayName, fallback: \.displayName))
                 .textFieldStyle(.roundedBorder)
-                TextField(L("ipaview.minimumOS"), text: Binding(
-                    get: { controller.recipe.metadata.minimumOSVersion ?? "" },
-                    set: { controller.recipe.metadata.minimumOSVersion = $0.nilIfBlank }
-                ))
+                TextField(L("ipaview.bundleID"), text: metadataBinding(\.bundleID, fallback: \.bundleID))
                 .textFieldStyle(.roundedBorder)
-                Toggle(L("ipaview.ppqRandomize"), isOn: Binding(
-                    get: { controller.recipe.metadata.randomizeBundleIDForPPQ },
-                    set: { controller.recipe.metadata.randomizeBundleIDForPPQ = $0 }
+                Text(L("workbench.recipe.bundleID.note"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    TextField(L("ipaview.shortVersion"), text: metadataBinding(\.shortVersion, fallback: \.shortVersion))
+                    .textFieldStyle(.roundedBorder)
+                    TextField(L("ipaview.minimumOS"), text: minimumOSBinding)
+                    .textFieldStyle(.roundedBorder)
+                }
+                Text(L("workbench.recipe.minimumOS.note"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Divider()
+
+                Toggle(L("ipaview.enableFileSharing"), isOn: Binding(
+                    get: { controller.recipe.metadata.enableFileSharing },
+                    set: { controller.recipe.metadata.enableFileSharing = $0 }
                 ))
+                Toggle(L("ipaview.removeURLSchemes"), isOn: Binding(
+                    get: { controller.recipe.metadata.removeURLSchemes },
+                    set: { controller.recipe.metadata.removeURLSchemes = $0 }
+                ))
+                if controller.isWeChatTarget {
+                    Toggle(L("workbench.recipe.repairNightIcon"), isOn: Binding(
+                        get: { controller.recipe.metadata.repairWhiteIcon },
+                        set: { controller.recipe.metadata.repairWhiteIcon = $0 }
+                    ))
+                }
+
+                Divider()
+
+                Toggle(L("ipaview.removeWatch"), isOn: componentBinding(\.watch))
+                Toggle(L("ipaview.removePlugIns"), isOn: componentBinding(\.plugIns))
+                Toggle(L("ipaview.removeAppClips"), isOn: componentBinding(\.appClips))
+                if controller.recipe.components.removesAnything {
+                    Toggle(isOn: Binding(
+                        get: { controller.recipe.components.destructiveRemovalConfirmed },
+                        set: { controller.recipe.components.destructiveRemovalConfirmed = $0 }
+                    )) {
+                        Text(L("workbench.recipe.confirmRemoval")).font(.caption)
+                    }
+                    .toggleStyle(.checkbox)
+                    .foregroundStyle(.orange)
+                }
+
+                Text(L("workbench.recipe.jailbreakDeps.note"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 HStack {
                     Button {
                         saveRecipe()
@@ -423,6 +470,57 @@ struct IpaWorkbenchTab: View {
                 }
             }
         }
+    }
+
+    private func componentBinding(
+        _ keyPath: WritableKeyPath<InjectionComponentPolicy, ComponentDisposition>
+    ) -> Binding<Bool> {
+        Binding(
+            get: { controller.recipe.components[keyPath: keyPath] == .remove },
+            set: { on in
+                controller.recipe.components[keyPath: keyPath] = on ? .remove : .preserve
+                if !controller.recipe.components.removesAnything {
+                    controller.recipe.components.destructiveRemovalConfirmed = false
+                }
+            }
+        )
+    }
+
+    /// 输入框显示当前包的 Info.plist 值；只有用户改过的才写入预设。
+    private func metadataBinding(
+        _ recipeKey: WritableKeyPath<InjectionMetadataChanges, String?>,
+        fallback sourceKey: KeyPath<AppBundleMetadataSummary, String>
+    ) -> Binding<String> {
+        Binding(
+            get: {
+                controller.recipe.metadata[keyPath: recipeKey]
+                    ?? controller.sourceAppMetadata?[keyPath: sourceKey]
+                    ?? ""
+            },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                let original = controller.sourceAppMetadata?[keyPath: sourceKey] ?? ""
+                controller.recipe.metadata[keyPath: recipeKey] =
+                    (trimmed.isEmpty || trimmed == original) ? nil : trimmed
+            }
+        )
+    }
+
+    /// 最低系统不跟 IPA 走，默认 iOS 14，用户改了才写入。
+    private var minimumOSBinding: Binding<String> {
+        Binding(
+            get: {
+                let value = controller.recipe.metadata.minimumOSVersion?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return value.isEmpty ? InjectionMetadataChanges.defaultMinimumOSVersion : value
+            },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                controller.recipe.metadata.minimumOSVersion = trimmed.isEmpty
+                    ? InjectionMetadataChanges.defaultMinimumOSVersion
+                    : trimmed
+            }
+        )
     }
 
     private func saveRecipe() {
@@ -464,29 +562,97 @@ struct IpaWorkbenchTab: View {
         Card {
             VStack(alignment: .leading, spacing: 10) {
                 Text(L("workbench.section.signing")).font(.headline)
-                Picker(L("workbench.signing.identity"), selection: $controller.selectedIdentity) {
-                    Text(L("workbench.signing.none")).tag(SigningIdentity?.none)
-                    ForEach(identities) { identity in
-                        Text(identityExpiryTitle(identity)).tag(SigningIdentity?.some(identity))
-                    }
+                Text(L("workbench.signing.choice.note"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Picker("", selection: Binding(
+                    get: { controller.recipe.sideloadSigning },
+                    set: { controller.recipe.sideloadSigning = $0 }
+                )) {
+                    Text(L("workbench.signing.choice.none")).tag(SideloadSigningChoice.none)
+                    Text(L("workbench.signing.choice.appleID")).tag(SideloadSigningChoice.appleID)
+                    Text(L("workbench.signing.choice.p12")).tag(SideloadSigningChoice.p12)
                 }
-                .frame(maxWidth: 420)
-                if let selected = controller.selectedIdentity {
-                    expiryCaption(selected.expiryStatus)
-                    CertificateDetailsDisclosure(identity: selected)
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                switch controller.recipe.sideloadSigning {
+                case .none:
+                    signingStateBadge
+                case .appleID:
+                    workbenchAppleIDSection
+                    signingStateBadge
+                case .p12:
+                    workbenchP12Section
+                    signingStateBadge
                 }
-                if !controller.provisioningProfiles.isEmpty {
-                    Text(L("workbench.signing.profilesCount",
-                           controller.provisioningProfiles.count,
-                           controller.profilesByBundleID.count))
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                workbenchProfileCapabilities
-                Divider()
-                workbenchAppleIDSection
-                signingStateBadge
             }
         }
+    }
+
+    private var workbenchP12Section: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L("workbench.signing.certificate.note"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            workbenchP12Import
+            if !controller.provisioningProfiles.isEmpty {
+                Text(L("workbench.signing.profilesCount",
+                       controller.provisioningProfiles.count,
+                       controller.profilesByBundleID.count))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            workbenchProfileCapabilities
+        }
+    }
+
+    private var workbenchP12Import: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                MultiFilePickerButton(
+                    title: workbenchP12PickerTitle,
+                    systemImage: "key.fill",
+                    types: certificateMaterialTypes
+                ) { urls in
+                    adoptWorkbenchCertificateMaterials(urls)
+                }
+                TextField(L("signingtab.p12Password"), text: $controller.developerCertificatePassword)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 220)
+            }
+            if !workbenchCertificateMessage.isEmpty {
+                Text(workbenchCertificateMessage)
+                    .font(.caption)
+                    .foregroundStyle(workbenchCertificateMessage.hasPrefix("❌") ? .red : .secondary)
+            }
+        }
+    }
+
+    private var certificateMaterialTypes: [UTType] {
+        [.item]
+    }
+
+    private var workbenchP12PickerTitle: String {
+        let cert = controller.pendingCertificateURL?.lastPathComponent
+        let profile = controller.provisioningProfiles.last?.lastPathComponent
+        switch (cert, profile) {
+        case let (c?, p?):
+            return L("workbench.signing.pair.ready", c, p)
+        case let (c?, nil):
+            return c
+        case let (nil, p?):
+            return p
+        default:
+            return L("signingtab.chooseP12AndProfile")
+        }
+    }
+
+    private func adoptWorkbenchCertificateMaterials(_ urls: [URL]) {
+        _ = controller.ingestSimpleInputs(urls)
+        if controller.developerCertificatePassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            controller.developerCertificatePassword = SigningService.defaultDeveloperCertificatePassword
+        }
+        workbenchCertificateMessage = ""
     }
 
     @ViewBuilder
@@ -509,7 +675,9 @@ struct IpaWorkbenchTab: View {
 
     private var workbenchAppleIDSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(L("workbench.signing.appleID")).font(.subheadline.weight(.medium))
+            Text(L("workbench.signing.appleID.note"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
             HStack {
                 TextField(L("signingtab.appleID.account"), text: $appleID)
                     .textFieldStyle(.roundedBorder)
@@ -569,13 +737,27 @@ struct IpaWorkbenchTab: View {
         case let .waitingForAssets(missingIdentity, missingProfiles):
             Label(L("workbench.signing.state.waiting"), systemImage: "hourglass")
                 .font(.footnote).foregroundStyle(.orange)
-            if missingIdentity {
-                Text(L("workbench.signing.state.waiting.missingIdentity"))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if !missingProfiles.isEmpty {
-                Text(L("workbench.signing.state.waiting.missingProfiles", missingProfiles.joined(separator: ", ")))
-                    .font(.caption).foregroundStyle(.secondary)
+            switch controller.recipe.sideloadSigning {
+            case .appleID:
+                if missingIdentity {
+                    Text(L("workbench.signing.state.waiting.missingAppleID"))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if !missingProfiles.isEmpty {
+                    Text(L("workbench.signing.state.waiting.missingDevice"))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            case .p12:
+                if missingIdentity {
+                    Text(L("workbench.signing.state.waiting.missingIdentity"))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if !missingProfiles.isEmpty {
+                    Text(L("workbench.signing.state.waiting.missingProfiles"))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            case .none:
+                EmptyView()
             }
         case .readyToSign:
             Label(L("workbench.signing.state.ready"), systemImage: "checkmark.seal")
@@ -653,7 +835,7 @@ struct IpaWorkbenchTab: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
-            .disabled(busy || controller.snapshot == nil || controller.selectedMainPlugin == nil)
+            .disabled(busy || controller.snapshot == nil || controller.enabledPlugins.isEmpty)
             Button {
                 run()
             } label: {
@@ -666,7 +848,12 @@ struct IpaWorkbenchTab: View {
             if !controller.canExecute && !busy {
                 Text(cannotExecuteReason).font(.caption).foregroundStyle(.secondary)
             }
-            Button(role: .destructive) { controller.reset(); log = ""; ok = nil } label: {
+            Button(role: .destructive) {
+                controller.reset()
+                workbenchCertificateMessage = ""
+                log = ""
+                ok = nil
+            } label: {
                 Label(L("workbench.reset"), systemImage: "arrow.counterclockwise")
             }
             .buttonStyle(.borderless)
@@ -674,7 +861,8 @@ struct IpaWorkbenchTab: View {
     }
 
     private var cannotExecuteReason: String {
-        if controller.selectedMainPlugin == nil { return L("workbench.cannot.noPlugin") }
+        if controller.enabledPlugins.isEmpty { return L("workbench.cannot.noPlugin") }
+        if controller.isComponentRemovalBlocked { return L("workbench.cannot.removalUnconfirmed") }
         if controller.isFilterBlocked { return L("workbench.cannot.filterBlocked") }
         if controller.signingDecision.isWaiting { return L("workbench.cannot.waitingSigning") }
         if controller.preflightHasBlockers { return L("workbench.cannot.preflightBlocked") }
@@ -715,26 +903,40 @@ struct IpaWorkbenchTab: View {
                 let plan = try controller.buildPlan()
                 controller.markPhase(.planned)
                 let urls = controller.accessURLs
+                let gate = ProgressLogGate()
+                let progress: @Sendable (String) -> Void = { line in
+                    Task { @MainActor in
+                        guard !gate.isStopped else { return }
+                        if log.isEmpty {
+                            log = line
+                        } else {
+                            log += "\n" + line
+                        }
+                    }
+                }
+                let outputURL = controller.proposedOutputURL
                 let result = try await Task.detached {
                     try FileSystemHelper.withSecurityScopedAccess(to: urls) {
-                        try IpaInjectionWorkflow.execute(plan)
+                        try IpaInjectionWorkflow.execute(plan, outputURL: outputURL, progress: progress)
                     }
                 }.value
+                gate.stop()
                 controller.recordExecution(result, toolVersion: toolVersion)
                 ok = result.audit.passed
-                var lines = [
-                    L("ipaview.result.done"),
-                    L("ipaview.result.output", result.outputURL.path),
-                    L("ipaview.result.audit", result.audit.entries.count)
-                ]
+                var lines = result.log
                 if !result.audit.unconfirmedDependencies.isEmpty {
                     lines.append(L("workbench.result.unconfirmed.logLine", result.audit.unconfirmedDependencies.count))
                 }
-                log = (lines + result.log).joined(separator: "\n")
+                log = lines.joined(separator: "\n")
                 revealInFinder(result.outputURL)
             } catch {
                 ok = false
-                log = "❌ \(operationError(error, paths: controller.accessURLs))"
+                let detail = operationError(error, paths: controller.accessURLs)
+                if log.isEmpty {
+                    log = "❌ \(detail)"
+                } else {
+                    log += "\n❌ \(detail)"
+                }
             }
             busy = false
         }
@@ -954,29 +1156,6 @@ struct IpaWorkbenchTab: View {
         }
     }
 
-    private func identityExpiryTitle(_ identity: SigningIdentity) -> String {
-        switch identity.expiryStatus {
-        case .unknown: return identity.name
-        case let .valid(days): return "\(identity.name) · \(L("signingtab.certificateValid", days))"
-        case let .expiringSoon(days): return "\(identity.name) · \(L("signingtab.certificateExpiring", days))"
-        case .expired: return "\(identity.name) · \(L("signingtab.certificateExpired"))"
-        }
-    }
-
-    @ViewBuilder
-    private func expiryCaption(_ status: CertificateExpiryStatus) -> some View {
-        switch status {
-        case .unknown:
-            EmptyView()
-        case let .valid(days):
-            Text(L("signingtab.certificateValid", days)).font(.caption).foregroundStyle(.secondary)
-        case let .expiringSoon(days):
-            Text(L("signingtab.certificateExpiring", days)).font(.caption).foregroundStyle(.orange)
-        case .expired:
-            Text(L("signingtab.certificateExpired")).font(.caption).foregroundStyle(.red)
-        }
-    }
-
     private func restoreWorkbenchAppleID() {
         guard let account = AppleIDSigningService.rememberedAccount() else { return }
         appleID = account.appleID
@@ -1059,15 +1238,23 @@ struct IpaWorkbenchTab: View {
         }
         return error.localizedDescription
     }
+}
 
-    private func openPrivacySettings(anchor: String) {
-        let candidates = [
-            "x-apple.systempreferences:com.apple.preference.security?\(anchor)",
-            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?\(anchor)"
-        ]
-        for value in candidates {
-            if let url = URL(string: value), NSWorkspace.shared.open(url) { return }
-        }
+/// 执行结束后挡住尚未落地的进度 Task,避免把已定稿的完整日志再追加一行。
+private final class ProgressLogGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stopped = false
+
+    var isStopped: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stopped
+    }
+
+    func stop() {
+        lock.lock()
+        stopped = true
+        lock.unlock()
     }
 }
 

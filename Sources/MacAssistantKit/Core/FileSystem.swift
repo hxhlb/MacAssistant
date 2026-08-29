@@ -53,6 +53,11 @@ public enum FileSystemHelper {
     }
 
     public static func isAccessPermissionError(_ error: Error) -> Bool {
+        // zip / unzip 等子进程把 "Permission denied" 写进自己的输出时，并不代表
+        // 用户选的文件被 TCC 拦住。那种失败要按命令错误展示，不能误导去开完全磁盘访问。
+        if error is IpaError { return false }
+        if error is IpaInjectionWorkflowError { return false }
+
         let nsError = error as NSError
         if nsError.domain == NSCocoaErrorDomain {
             let permissionCodes: Set<Int> = [

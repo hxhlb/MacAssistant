@@ -14,7 +14,13 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "AssetCatalogSupport",
+            path: "Sources/AssetCatalogSupport",
+            publicHeadersPath: "include"
+        ),
+        .target(
             name: "MacAssistantKit",
+            dependencies: ["AssetCatalogSupport"],
             path: "Sources/MacAssistantKit",
             resources: [
                 .process("Localization")

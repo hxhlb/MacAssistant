@@ -43,10 +43,10 @@ final class MemoryServiceTests: XCTestCase {
             MemoryService.usedBytes(pages: parsed.pages, pageSize: parsed.pageSize),
             1_274_088 * 16_384
         )
-        // 已缓存文件 = 文件页 + 可清除页。
+        // 已缓存文件只计文件页，不再把可清除页加进去。
         XCTAssertEqual(
             MemoryService.cachedFilesBytes(pages: parsed.pages, pageSize: parsed.pageSize),
-            235_338 * 16_384
+            210_276 * 16_384
         )
     }
 
@@ -61,6 +61,7 @@ final class MemoryServiceTests: XCTestCase {
             "Pages free": 10
         ]
         XCTAssertEqual(MemoryService.usedBytes(pages: pages, pageSize: 16_384), 70 * 16_384)
+        XCTAssertEqual(MemoryService.cachedFilesBytes(pages: pages, pageSize: 16_384), 100_000 * 16_384)
     }
 
     func testParseSwapAndPressure() {
@@ -72,9 +73,35 @@ final class MemoryServiceTests: XCTestCase {
             MemoryService.parsePressureFreePercent("System-wide memory free percentage: 43%"),
             43
         )
-        XCTAssertEqual(MemoryService.pressureLevel(freePercent: 43), .healthy)
-        XCTAssertEqual(MemoryService.pressureLevel(freePercent: 15), .warning)
-        XCTAssertEqual(MemoryService.pressureLevel(freePercent: 5), .critical)
+        XCTAssertEqual(MemoryService.pressureLevel(statusLevel: 0), .healthy)
+        XCTAssertEqual(MemoryService.pressureLevel(statusLevel: 1), .warning)
+        XCTAssertEqual(MemoryService.pressureLevel(statusLevel: 2), .critical)
+        XCTAssertEqual(MemoryService.pressureLevel(statusLevel: 4), .critical)
+        XCTAssertEqual(MemoryService.pressureLevel(statusLevel: nil), .unknown)
+    }
+
+    func testSnapshotUsedFractionMatchesSystemUsedNotFreePercent() {
+        let snapshot = MemorySnapshot(
+            physical: 24 * 1_024 * 1_024 * 1_024,
+            used: 18_750_000_000,
+            cached: 3_690_000_000,
+            compressed: 930_000_000,
+            swapUsed: 24_500_000_000,
+            pressureFreePercent: 78,
+            pressureLevel: .warning
+        )
+        XCTAssertEqual(snapshot.usedPercent, 73)
+        XCTAssertGreaterThan(snapshot.usedFraction, 0.7)
+        // free% 不能再当进度条：78% 可用会画成 22%，和系统已用相反。
+        XCTAssertNotEqual(snapshot.usedPercent, 100 - (snapshot.pressureFreePercent ?? 0))
+    }
+
+    func testMemoryStatusPressureLevelIsReadable() {
+        let level = MemoryService.memoryStatusPressureLevel()
+        XCTAssertNotNil(level)
+        if let level {
+            XCTAssertGreaterThanOrEqual(level, 0)
+        }
     }
 
     func testParsePSSortsRSSAndFiltersUser() {
@@ -82,11 +109,103 @@ final class MemoryServiceTests: XCTestCase {
           100  501  2048 /Applications/A.app/Contents/MacOS/A
           101    0 99999 /usr/libexec/system
           102  501  4096 /Applications/B App.app/Contents/MacOS/B App
+          103  501     0 /Applications/IDA Professional 9.4.app/Contents/MacOS/ida
         """
         let processes = MemoryService.parsePS(text, currentUserID: 501)
-        XCTAssertEqual(processes.map(\.pid), [102, 100])
+        XCTAssertEqual(processes.map(\.pid), [102, 100, 103])
         XCTAssertEqual(processes.first?.rssBytes, 4_194_304)
         XCTAssertEqual(processes.first?.name, "B App")
+        XCTAssertEqual(processes.last?.rssBytes, 0)
+        XCTAssertEqual(processes.last?.name, "ida")
+    }
+
+    func testSortPrefersFootprintOverRSS() {
+        let ida = ProcessMemoryInfo(
+            pid: 55951,
+            userID: 501,
+            rssBytes: 48 * 1_024 * 1_024,
+            executablePath: "/Applications/IDA Professional 9.4.app/Contents/MacOS/ida",
+            footprintBytes: 11 * 1_024 * 1_024 * 1_024,
+            displayName: "IDA Professional 9.4"
+        )
+        let telegram = ProcessMemoryInfo(
+            pid: 693,
+            userID: 501,
+            rssBytes: 238 * 1_024 * 1_024,
+            executablePath: "/Applications/Telegram.app/Contents/MacOS/Telegram",
+            footprintBytes: 2 * 1_024 * 1_024 * 1_024
+        )
+        XCTAssertEqual(ida.memoryBytes, 11 * 1_024 * 1_024 * 1_024)
+        XCTAssertTrue(MemoryService.isHigherMemoryUsage(ida, telegram))
+        XCTAssertEqual([telegram, ida].sorted(by: MemoryService.isHigherMemoryUsage).map(\.pid), [55951, 693])
+    }
+
+    func testProcessSearchMatchesAppNamePathAndPID() {
+        let process = ProcessMemoryInfo(
+            pid: 55951,
+            userID: 501,
+            rssBytes: 48 * 1_024 * 1_024,
+            executablePath: "/Applications/IDA Professional 9.4.app/Contents/MacOS/ida",
+            footprintBytes: 11 * 1_024 * 1_024 * 1_024,
+            displayName: "IDA Professional 9.4"
+        )
+        XCTAssertTrue(process.matches("IDA"))
+        XCTAssertTrue(process.matches("ida professional"))
+        XCTAssertTrue(process.matches("9.4"))
+        XCTAssertTrue(process.matches("55951"))
+        XCTAssertTrue(process.matches("ida"))
+        XCTAssertFalse(process.matches("ghidra"))
+    }
+
+    func testDisplayNameUsesAppFolderWhenPlistMatchesBinary() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MADisplayName-\(UUID().uuidString)", isDirectory: true)
+        let app = root.appendingPathComponent("IDA Professional 9.4.app", isDirectory: true)
+        let contents = app.appendingPathComponent("Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let plist: [String: String] = [
+            "CFBundleName": "ida",
+            "CFBundleExecutable": "ida"
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: contents.appendingPathComponent("Info.plist"))
+
+        let path = app.appendingPathComponent("Contents/MacOS/ida").path
+        XCTAssertEqual(
+            ProcessDisplayNameResolver.displayName(executablePath: path),
+            "IDA Professional 9.4"
+        )
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    func testDisplayNameKeepsLocalizedBundleName() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MADisplayName-\(UUID().uuidString)", isDirectory: true)
+        let app = root.appendingPathComponent("WeChat.app", isDirectory: true)
+        let contents = app.appendingPathComponent("Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let plist: [String: String] = [
+            "CFBundleDisplayName": "微信",
+            "CFBundleName": "WeChat"
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: contents.appendingPathComponent("Info.plist"))
+
+        XCTAssertEqual(
+            ProcessDisplayNameResolver.displayName(
+                executablePath: app.appendingPathComponent("Contents/MacOS/WeChat").path
+            ),
+            "微信"
+        )
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    func testCurrentProcessFootprintIsReadable() {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let footprint = MemoryService.processMemoryFootprint(pid: pid)
+        XCTAssertNotNil(footprint)
+        XCTAssertGreaterThan(footprint ?? 0, 0)
+        XCTAssertNil(MemoryService.processMemoryFootprint(pid: -1))
     }
 
     func testApplicationBundleResolverFindsOwningApp() {
@@ -152,6 +271,11 @@ final class MemoryServiceTests: XCTestCase {
 
     func testByteFormattingIsNonEmpty() {
         XCTAssertFalse(MemoryService.formatBytes(1_073_741_824).isEmpty)
+        // 24 GiB 机器：活动监视器写 24 GB（中间可能是窄空格），不能用文件容量的 25.77 GB。
+        let physical = MemoryService.formatBytes(25_769_803_776)
+        XCTAssertTrue(physical.contains("24"), physical)
+        XCTAssertTrue(physical.contains("GB"), physical)
+        XCTAssertFalse(physical.contains("25.77"), physical)
     }
 
     func testPurgeIsDeveloperFileCacheOperationNotMemoryRelease() {

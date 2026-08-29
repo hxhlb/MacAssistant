@@ -207,6 +207,36 @@ final class DylibServiceTests: XCTestCase {
         XCTAssertEqual(names, ["Foo-1.dylib", "Foo.dylib"].sorted())
     }
 
+    func testChangeDependencyRewritesJailbreakInstallNameWithId() throws {
+        for tool in [ExternalTool.clang, .otool, .installNameTool] where !tool.isAvailable {
+            throw XCTSkip("缺少 \(tool.commandName)")
+        }
+        let root = try FileSystemHelper.makeTemporaryDirectory(prefix: "dylib-id-rewrite")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("themebox.c")
+        let dylib = root.appendingPathComponent("ThemeBox.dylib")
+        try "int themebox(void) { return 0; }\n".write(to: source, atomically: true, encoding: .utf8)
+        let jailbreakID = "/Library/MobileSubstrate/DynamicLibraries/ThemeBox.dylib"
+        let built = try Shell.run(ExternalTool.clang.path!, [
+            "-dynamiclib", "-Wl,-install_name,\(jailbreakID)",
+            "-o", dylib.path, source.path
+        ])
+        XCTAssertTrue(built.succeeded, built.combinedOutput)
+        XCTAssertEqual(try DylibService.analyze(fileAt: dylib).installName, jailbreakID)
+
+        let listed = try DylibService.dependencies(fileAt: dylib).map(\.path)
+        XCTAssertTrue(listed.contains(jailbreakID), "otool -L 会把安装名列进依赖")
+        let plan = TweakInjectService.planRewrites(for: listed)
+        XCTAssertEqual(plan.map(\.from), [jailbreakID])
+        XCTAssertEqual(plan.map(\.to), ["@rpath/ThemeBox.dylib"])
+
+        for change in plan {
+            _ = try DylibService.changeDependency(from: change.from, to: change.to, fileAt: dylib)
+        }
+        XCTAssertEqual(try DylibService.analyze(fileAt: dylib).installName, "@rpath/ThemeBox.dylib")
+        XCTAssertFalse(try DylibService.loadDependencyPaths(fileAt: dylib).contains(jailbreakID))
+    }
+
     private func makePayloadFixture(in root: URL) throws -> URL {
         let dylibDir = root.appendingPathComponent("Library/MobileSubstrate/DynamicLibraries")
         let framework = root.appendingPathComponent("Library/Frameworks/Sample.framework")

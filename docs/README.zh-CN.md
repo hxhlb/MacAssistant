@@ -41,7 +41,7 @@
 
 - **DEB**：制作、检查、解包、转换与重新打包
 - **DYLIB**：依赖检查、动态库提取、安装名与 rpath 修改
-- **IPA**：拖入工作台、安装与原样提取（不脱壳）、可选本机 ipatool 下载自己账号的官方加密包、注入、瘦身、头文件提取、逐层签名与 Apple ID 签名
+- **IPA**：拖入工作台、安装与原样提取（不脱壳）、注入、瘦身、头文件提取、逐层签名与 Apple ID 签名
 - **Mach-O**：原生 Swift 检查与 dylib 注入，支持单架构和通用二进制
 - **环境检查**：识别所需工具并提供清晰的安装指引
 
@@ -65,7 +65,7 @@
 
 ### 首次打开被拦截？
 
-当前公开测试版是 **ad-hoc 签名，未经 Apple 公证**。先打开一次，再到 **系统设置 → 隐私与安全性 → 仍要打开**。不要全局关闭 Gatekeeper。
+1.0 正式版是 **ad-hoc 签名，未经 Apple 公证**。先打开一次，再到 **系统设置 → 隐私与安全性 → 仍要打开**。不要全局关闭 Gatekeeper。
 
 ## 构建
 
@@ -83,7 +83,7 @@ open "dist/Mac小助手.app"
 </p>
 
 <p align="center">
-  <img src="https://progress-bar.xyz/1/?scale=100&title=goal&width=420&color=0A84FF&suffix=%20/%20100" alt="Star 目标：1 / 100">
+  <img src="https://progress-bar.xyz/dynamic/json/?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fiosrxwy%2FMacAssistant&query=%24.stargazers_count&scale=100&title=goal&width=420&color=0A84FF&suffix=%20/%20100&cache=3600" alt="Star 目标">
 </p>
 
 <p align="center">
@@ -127,7 +127,7 @@ open "dist/Mac小助手.app"
 
 ## 致谢
 
-[AltSign](https://github.com/rileytestut/AltSign) / [AltStore](https://github.com/altstoreio/AltStore) · [xtool](https://github.com/xtool-org/xtool) · [libimobiledevice](https://libimobiledevice.org) · [Theos](https://github.com/theos/theos) · [zsign](https://github.com/zhlynn/zsign) · [ipatool](https://github.com/majd/ipatool)
+[AltSign](https://github.com/rileytestut/AltSign) / [AltStore](https://github.com/altstoreio/AltStore) · [xtool](https://github.com/xtool-org/xtool) · [libimobiledevice](https://libimobiledevice.org) · [Theos](https://github.com/theos/theos) · [zsign](https://github.com/zhlynn/zsign)
 
 均不捆绑其二进制。
 

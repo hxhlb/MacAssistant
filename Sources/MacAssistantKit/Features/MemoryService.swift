@@ -46,29 +46,117 @@ public struct MemorySnapshot: Sendable {
         self.pressureLevel = pressureLevel
         self.capturedAt = capturedAt
     }
+
+    /// 进度条用系统已用 / 物理内存，和活动监视器「内存已用」同一口径，不用 free%。
+    public var usedFraction: Double {
+        guard physical > 0 else { return 0 }
+        return Double(used) / Double(physical)
+    }
+
+    public var usedPercent: Int {
+        Int((usedFraction * 100).rounded())
+    }
 }
 
 public struct ProcessMemoryInfo: Identifiable, Hashable, Sendable {
     public let pid: Int32
     public let userID: UInt32
     public let rssBytes: UInt64
+    /// 活动监视器「内存」列（phys_footprint）。采集失败时为 0，界面回退到 RSS。
+    public let footprintBytes: UInt64
     public let executablePath: String
+    public let displayName: String
 
     public var id: Int32 { pid }
     public var name: String {
-        let url = URL(fileURLWithPath: executablePath)
-        let component = url.lastPathComponent
-        return component.isEmpty ? executablePath : component
+        ProcessDisplayNameResolver.executableName(executablePath)
+    }
+    /// 列表排序和占比使用的占用：优先 footprint，否则 RSS。
+    public var memoryBytes: UInt64 {
+        footprintBytes > 0 ? footprintBytes : rssBytes
     }
     public var applicationBundlePath: String? {
         ProcessApplicationResolver.applicationBundlePath(forExecutablePath: executablePath)
     }
 
-    public init(pid: Int32, userID: UInt32, rssBytes: UInt64, executablePath: String) {
+    public init(
+        pid: Int32,
+        userID: UInt32,
+        rssBytes: UInt64,
+        executablePath: String,
+        footprintBytes: UInt64 = 0,
+        displayName: String? = nil
+    ) {
         self.pid = pid
         self.userID = userID
         self.rssBytes = rssBytes
+        self.footprintBytes = footprintBytes
         self.executablePath = executablePath
+        let fallback = ProcessDisplayNameResolver.executableName(executablePath)
+        if let displayName, !displayName.isEmpty {
+            self.displayName = displayName
+        } else {
+            self.displayName = fallback
+        }
+    }
+
+    public func matches(_ query: String) -> Bool {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return true }
+        if String(pid).contains(needle) { return true }
+        if displayName.localizedCaseInsensitiveContains(needle) { return true }
+        if name.localizedCaseInsensitiveContains(needle) { return true }
+        if executablePath.localizedCaseInsensitiveContains(needle) { return true }
+        if let bundle = applicationBundlePath, bundle.localizedCaseInsensitiveContains(needle) {
+            return true
+        }
+        return false
+    }
+}
+
+public enum ProcessDisplayNameResolver {
+    public static func executableName(_ path: String) -> String {
+        let component = URL(fileURLWithPath: path).lastPathComponent
+        return component.isEmpty ? path : component
+    }
+
+    /// 给短二进制名补上 App 名称，避免 IDA 只显示 `ida`、搜索「IDA Professional」找不到。
+    public static func displayName(executablePath: String) -> String {
+        let fallback = executableName(executablePath)
+        let bundles = ProcessApplicationResolver.applicationBundlePaths(forExecutablePath: executablePath)
+        guard let bundlePath = bundles.last else { return fallback }
+
+        let folderName = appFolderName(bundlePath)
+        if let plistName = infoPlistName(bundlePath), !plistName.isEmpty {
+            if plistName.compare(fallback, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame,
+               let folderName {
+                return folderName
+            }
+            return plistName
+        }
+        return folderName ?? fallback
+    }
+
+    public static func appFolderName(_ bundlePath: String) -> String? {
+        let last = URL(fileURLWithPath: bundlePath).lastPathComponent
+        guard last.lowercased().hasSuffix(".app"), last.count > 4 else { return nil }
+        return String(last.dropLast(4))
+    }
+
+    public static func infoPlistName(_ bundlePath: String) -> String? {
+        let url = URL(fileURLWithPath: bundlePath)
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Info.plist")
+        guard let plist = NSDictionary(contentsOf: url) else { return nil }
+        if let display = plist["CFBundleDisplayName"] as? String {
+            let trimmed = display.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        if let name = plist["CFBundleName"] as? String {
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return nil
     }
 }
 
@@ -197,9 +285,7 @@ public enum MemoryService {
 
         let swapResult = try? Shell.run("/usr/sbin/sysctl", ["-n", "vm.swapusage"])
         let swapUsed = parseSwapUsage(swapResult?.stdout ?? "")
-
-        let pressureResult = try? Shell.run("/usr/bin/memory_pressure", ["-Q"])
-        let pressurePercent = parsePressureFreePercent(pressureResult?.stdout ?? "")
+        let statusLevel = memoryStatusPressureLevel()
 
         return MemorySnapshot(
             physical: physical,
@@ -207,8 +293,8 @@ public enum MemoryService {
             cached: cachedFilesBytes(pages: parsed.pages, pageSize: pageSize),
             compressed: compressedPages * pageSize,
             swapUsed: swapUsed,
-            pressureFreePercent: pressurePercent,
-            pressureLevel: pressureLevel(freePercent: pressurePercent)
+            pressureFreePercent: nil,
+            pressureLevel: pressureLevel(statusLevel: statusLevel)
         )
     }
 
@@ -226,24 +312,47 @@ public enum MemoryService {
         return (appPages + wired + compressed) * pageSize
     }
 
-    /// 活动监视器口径的“已缓存文件”：文件页 + 可清除页。
+    /// 活动监视器「已缓存文件」：只计文件页。可清除页已从匿名内存里扣过，再加进来会重复计算。
     public static func cachedFilesBytes(pages: [String: UInt64], pageSize: UInt64) -> UInt64 {
-        let fileBacked = pages["File-backed pages"] ?? 0
-        let purgeable = pages["Pages purgeable"] ?? 0
-        return (fileBacked + purgeable) * pageSize
+        (pages["File-backed pages"] ?? 0) * pageSize
     }
 
     public static func processes(currentUserOnly: Bool = true) throws -> [ProcessMemoryInfo] {
         let result = try Shell.run("/bin/ps", ["-axo", "pid=,uid=,rss=,comm="])
         guard result.succeeded else { throw MemoryServiceError.commandFailed(result.combinedOutput) }
-        return parsePS(result.stdout, currentUserID: currentUserOnly ? getuid() : nil).map { process in
-            ProcessMemoryInfo(
-                pid: process.pid,
-                userID: process.userID,
-                rssBytes: process.rssBytes,
-                executablePath: processExecutablePath(pid: process.pid) ?? process.executablePath
-            )
+        return parsePS(result.stdout, currentUserID: currentUserOnly ? getuid() : nil)
+            .map { process in
+                let path = processExecutablePath(pid: process.pid) ?? process.executablePath
+                return ProcessMemoryInfo(
+                    pid: process.pid,
+                    userID: process.userID,
+                    rssBytes: process.rssBytes,
+                    executablePath: path,
+                    footprintBytes: processMemoryFootprint(pid: process.pid) ?? 0,
+                    displayName: ProcessDisplayNameResolver.displayName(executablePath: path)
+                )
+            }
+            .filter { $0.memoryBytes > 0 }
+            .sorted(by: Self.isHigherMemoryUsage)
+    }
+
+    /// 活动监视器「内存」列：phys_footprint，包含压缩和仍记在该进程头上的换出页。
+    /// 不能用 ps 的 RSS：大工具（IDA / Xcode）被压缩后 RSS 会掉到几十 MB，列表里就像“没开”。
+    public static func processMemoryFootprint(pid: Int32) -> UInt64? {
+        guard pid > 0 else { return nil }
+        var info = rusage_info_v4()
+        let status = withUnsafeMutablePointer(to: &info) { pointer -> Int32 in
+            pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { rebound in
+                proc_pid_rusage(pid, Int32(RUSAGE_INFO_V4), rebound)
+            }
         }
+        guard status == 0 else { return nil }
+        return info.ri_phys_footprint
+    }
+
+    public static func isHigherMemoryUsage(_ lhs: ProcessMemoryInfo, _ rhs: ProcessMemoryInfo) -> Bool {
+        if lhs.memoryBytes == rhs.memoryBytes { return lhs.pid < rhs.pid }
+        return lhs.memoryBytes > rhs.memoryBytes
     }
 
     public static func parseVMStat(_ text: String) -> (pageSize: UInt64, pages: [String: UInt64]) {
@@ -282,11 +391,23 @@ public enum MemoryService {
         return Int(text[range].filter(\.isNumber))
     }
 
-    public static func pressureLevel(freePercent: Int?) -> MemoryPressureLevel {
-        guard let freePercent else { return .unknown }
-        if freePercent >= 20 { return .healthy }
-        if freePercent >= 10 { return .warning }
-        return .critical
+    /// 活动监视器压力图同源：`kern.memorystatus_vm_pressure_level`。
+    /// 0 正常，1 偏高，2 紧急，4 严重。不能用 memory_pressure -Q 的 free%。
+    public static func memoryStatusPressureLevel() -> Int? {
+        var value: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        let status = sysctlbyname("kern.memorystatus_vm_pressure_level", &value, &size, nil, 0)
+        return status == 0 ? Int(value) : nil
+    }
+
+    public static func pressureLevel(statusLevel: Int?) -> MemoryPressureLevel {
+        guard let statusLevel else { return .unknown }
+        switch statusLevel {
+        case 0: return .healthy
+        case 1: return .warning
+        case 2, 3, 4: return .critical
+        default: return statusLevel > 0 ? .critical : .unknown
+        }
     }
 
     public static func parsePS(_ text: String, currentUserID: uid_t?) -> [ProcessMemoryInfo] {
@@ -302,13 +423,10 @@ public enum MemoryService {
                   currentUserID == nil || uid == currentUserID
             else { return nil }
             let path = String(columns[3]).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !path.isEmpty, rssKB > 0 else { return nil }
+            guard !path.isEmpty else { return nil }
             return ProcessMemoryInfo(pid: pid, userID: uid, rssBytes: rssKB * 1024, executablePath: path)
         }
-        .sorted {
-            if $0.rssBytes == $1.rssBytes { return $0.pid < $1.pid }
-            return $0.rssBytes > $1.rssBytes
-        }
+        .sorted(by: isHigherMemoryUsage)
     }
 
     public static func validatePID(

@@ -7,8 +7,8 @@ import MacAssistantKit
 struct SigningTab: View {
     enum Mode: String, CaseIterable, Identifiable {
         case jailbreak = "越狱 / 本地"
-        case realDevice = "真机证书（Beta）"
-        case appleID = "Apple ID 签名"
+        case realDevice = "P12 证书侧载"
+        case appleID = "Apple ID 侧载"
         var id: String { rawValue }
 
         /// rawValue 同时是选中态的标识,展示一律走这里。
@@ -21,7 +21,7 @@ struct SigningTab: View {
         }
     }
 
-    @State private var mode: Mode = .jailbreak
+    @State private var mode: Mode = .appleID
     @State private var ipaURL: URL?
 
     // 越狱
@@ -33,6 +33,8 @@ struct SigningTab: View {
     @State private var targetSession: InjectionTargetSession?
     @State private var profilesByBundleID: [String: URL] = [:]
     @State private var overrideBundleID = ""
+    @State private var bundlesLoading = false
+    @State private var bundleLoadError: String?
 
     // Apple ID
     @State private var appleID = ""
@@ -72,8 +74,11 @@ struct SigningTab: View {
                 }
             }
 
+            Text(L("signingtab.sideload.note"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Picker("", selection: $mode) {
-                ForEach(Mode.allCases) { Text($0.title).tag($0) }
+                ForEach([Mode.appleID, .realDevice, .jailbreak]) { Text($0.title).tag($0) }
             }.pickerStyle(.segmented).labelsHidden()
 
             switch mode {
@@ -130,7 +135,8 @@ struct SigningTab: View {
                     bundleIDs: signingBundleIDs,
                     identities: $identities,
                     selectedIdentity: $selectedIdentity,
-                    profilesByBundleID: $profilesByBundleID
+                    profilesByBundleID: $profilesByBundleID,
+                    discovery: profileDiscovery
                 )
                 VStack(alignment: .leading, spacing: 4) {
                     Text(L("signingtab.overrideBundleID")).font(.subheadline.weight(.medium))
@@ -146,8 +152,7 @@ struct SigningTab: View {
                 .buttonStyle(.borderedProminent).controlSize(.large)
                 .disabled(
                     busy || ipaURL == nil || selectedIdentity == nil
-                        || signingBundleIDs.isEmpty
-                        || Set(signingBundleIDs).contains { profilesByBundleID[$0] == nil }
+                        || profilesByBundleID.isEmpty
                 )
             }
         }
@@ -172,9 +177,9 @@ struct SigningTab: View {
     }
 
     private func signRealDevice() {
-        guard let ipa = ipaURL, let identity = selectedIdentity, !signingBundleIDs.isEmpty else { return }
+        guard let ipa = ipaURL, let identity = selectedIdentity, !profilesByBundleID.isEmpty else { return }
         let bid = overrideBundleID.trimmingCharacters(in: .whitespaces)
-        let activeProfiles = profilesByBundleID.filter { signingBundleIDs.contains($0.key) }
+        let activeProfiles = profilesByBundleID
         let recipe = RealDeviceSigningRecipe(
             identityID: identity.id,
             identityName: identity.name,
@@ -557,23 +562,39 @@ struct SigningTab: View {
         )) ?? []
     }
 
+    private var profileDiscovery: DeveloperSigningPicker.Discovery {
+        if ipaURL == nil { return .waitingForIPA }
+        if bundlesLoading { return .loading }
+        if let bundleLoadError { return .failed(bundleLoadError) }
+        if signingBundleIDs.isEmpty { return .noBundles }
+        return .ready
+    }
+
     private func selectIPA(_ url: URL) {
         ipaURL = url
         targetSession = nil
         profilesByBundleID = [:]
+        bundleLoadError = nil
+        bundlesLoading = true
         log = ""
         ok = nil
         Task {
-            let session = try? await Task.detached {
-                try FileSystemHelper.withSecurityScopedAccess(to: [url]) {
-                    try InjectionTargetDiscovery.open(.ipa(url))
+            do {
+                let session = try await Task.detached {
+                    try FileSystemHelper.withSecurityScopedAccess(to: [url]) {
+                        try InjectionTargetDiscovery.open(.ipa(url))
+                    }
+                }.value
+                targetSession = session
+                if let plist = try? IpaService.infoPlist(appBundle: session.appURL) {
+                    overrideBundleID = plist["CFBundleIdentifier"] as? String ?? ""
                 }
-            }.value
-            targetSession = session
-            if let app = session?.appURL,
-               let plist = try? IpaService.infoPlist(appBundle: app) {
-                overrideBundleID = plist["CFBundleIdentifier"] as? String ?? ""
+            } catch {
+                bundleLoadError = operationError(error, paths: [url])
+                ok = false
+                log = "❌ " + (bundleLoadError ?? error.localizedDescription)
             }
+            bundlesLoading = false
         }
     }
 
@@ -584,18 +605,28 @@ struct SigningTab: View {
     }
 }
 
-/// 一个共享的 .p12 开发者证书，以及每个嵌套 bundle 自己的 profile。
+/// 手机 IPA：一份 p12 + 至少一份 mobileprovision，交给 zsign。
 struct DeveloperSigningPicker: View {
+    enum Discovery {
+        case waitingForIPA
+        case loading
+        case failed(String)
+        case noBundles
+        case ready
+    }
+
     let bundleIDs: [String]
     @Binding var identities: [SigningIdentity]
     @Binding var selectedIdentity: SigningIdentity?
     @Binding var profilesByBundleID: [String: URL]
+    var discovery: Discovery = .waitingForIPA
 
     @State private var p12URL: URL?
-    @State private var p12Password = ""
+    @State private var p12Password = SigningService.defaultDeveloperCertificatePassword
     @State private var certificateMessage = ""
     @State private var certificateBusy = false
     @State private var library: [StoredSigningCertificate] = []
+    @State private var importedProfiles: [URL] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -624,16 +655,14 @@ struct DeveloperSigningPicker: View {
             }
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    FilePickerButton(
-                        title: p12URL?.lastPathComponent ?? L("signingtab.chooseP12"),
+                    MultiFilePickerButton(
+                        title: certificatePairPickerTitle,
                         systemImage: "key.fill",
-                        types: [.item]
-                    ) { url in
-                        guard ["p12", "pfx"].contains(url.pathExtension.lowercased()) else { return }
-                        p12URL = url
-                        certificateMessage = ""
+                        types: certificateMaterialTypes
+                    ) { urls in
+                        adoptCertificateMaterials(urls)
                     }
-                    SecureField(L("signingtab.p12Password"), text: $p12Password)
+                    TextField(L("signingtab.p12Password"), text: $p12Password)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 220)
                     Button {
@@ -671,31 +700,125 @@ struct DeveloperSigningPicker: View {
                 }
             }
 
-            if bundleIDs.isEmpty {
-                Text(L("signingtab.loadingBundles"))
-                    .font(.footnote).foregroundStyle(.secondary)
-            } else {
-                ForEach(bundleIDs, id: \.self) { bundleID in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(bundleID).font(.caption.monospaced())
-                        FilePickerButton(
-                            title: profilesByBundleID[bundleID]?.lastPathComponent
-                                ?? L("signingtab.chooseProfile"),
-                            systemImage: "doc.badge.gearshape",
-                            types: [.item]
-                        ) { url in
-                            profilesByBundleID[bundleID] = url
-                        }
-                        if let profileURL = profilesByBundleID[bundleID] {
-                            ProfileCapabilitiesLoader(profileURL: profileURL)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(L("signingtab.profileSection")).font(.subheadline.weight(.medium))
+                HStack {
+                    MultiFilePickerButton(
+                        title: L("signingtab.chooseProfile"),
+                        systemImage: "doc.badge.gearshape",
+                        types: profileContentTypes
+                    ) { urls in
+                        importProfiles(urls)
+                    }
+                    Spacer()
+                }
+                profileDiscoveryHint
+                if !importedProfiles.isEmpty {
+                    ForEach(importedProfiles, id: \.path) { url in
+                        Label(url.lastPathComponent, systemImage: "checkmark.seal")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if !bundleIDs.isEmpty {
+                    ForEach(bundleIDs, id: \.self) { bundleID in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(bundleID).font(.caption.monospaced())
+                            FilePickerButton(
+                                title: profilesByBundleID[bundleID]?.lastPathComponent
+                                    ?? L("signingtab.chooseProfile"),
+                                systemImage: "doc.badge.gearshape",
+                                types: profileContentTypes
+                            ) { url in
+                                importProfiles([url])
+                                profilesByBundleID[bundleID] = url
+                            }
+                            if let profileURL = profilesByBundleID[bundleID] {
+                                ProfileCapabilitiesLoader(profileURL: profileURL)
+                            }
                         }
                     }
                 }
+                Text(L("signingtab.profileMappingDetail"))
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            Text(L("signingtab.profileMappingDetail"))
-                .font(.caption).foregroundStyle(.secondary)
         }
         .task { restoreStoredCertificate() }
+        .onChange(of: bundleIDs) { _ in remapImportedProfiles() }
+    }
+
+    private var profileContentTypes: [UTType] {
+        [
+            UTType(filenameExtension: "mobileprovision") ?? .data,
+            UTType(filenameExtension: "provisionprofile") ?? .data,
+        ]
+    }
+
+    private var certificateMaterialTypes: [UTType] {
+        [.item]
+    }
+
+    private var certificatePairPickerTitle: String {
+        let cert = p12URL?.lastPathComponent
+        let profile = importedProfiles.last?.lastPathComponent
+        switch (cert, profile) {
+        case let (c?, p?):
+            return L("workbench.signing.pair.ready", c, p)
+        case let (c?, nil):
+            return c
+        default:
+            return L("signingtab.chooseP12AndProfile")
+        }
+    }
+
+    private func adoptCertificateMaterials(_ urls: [URL]) {
+        var profiles: [URL] = []
+        for url in urls {
+            switch url.pathExtension.lowercased() {
+            case "p12", "pfx":
+                p12URL = url
+            case "mobileprovision", "provisionprofile":
+                profiles.append(url)
+            default:
+                break
+            }
+        }
+        if !profiles.isEmpty {
+            importProfiles(profiles)
+        }
+        if p12Password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            p12Password = SigningService.defaultDeveloperCertificatePassword
+        }
+        certificateMessage = ""
+    }
+
+    @ViewBuilder
+    private var profileDiscoveryHint: some View {
+        switch effectiveDiscovery {
+        case .waitingForIPA:
+            Text(L("signingtab.needIPAForProfiles"))
+                .font(.footnote).foregroundStyle(.secondary)
+        case .loading:
+            Text(L("signingtab.loadingBundles"))
+                .font(.footnote).foregroundStyle(.secondary)
+        case let .failed(message):
+            Text(message)
+                .font(.footnote).foregroundStyle(.red)
+        case .noBundles:
+            Text(L("signingtab.noEmbeddedBundles"))
+                .font(.footnote).foregroundStyle(.orange)
+        case .ready:
+            EmptyView()
+        }
+    }
+
+    private var effectiveDiscovery: Discovery {
+        if case .waitingForIPA = discovery, !bundleIDs.isEmpty { return .ready }
+        if case .loading = discovery { return .loading }
+        if case .failed = discovery { return discovery }
+        if case .noBundles = discovery { return .noBundles }
+        if !bundleIDs.isEmpty { return .ready }
+        return discovery
     }
 
     @ViewBuilder
@@ -718,14 +841,37 @@ struct DeveloperSigningPicker: View {
     private func restoreStoredCertificate() {
         library = SigningCertificateLibrary.load()
         p12URL = SigningService.storedDeveloperCertificateURL()
-        p12Password = SigningService.rememberedDeveloperCertificatePassword() ?? ""
+        p12Password = SigningService.resolvedDeveloperCertificatePassword(
+            SigningService.rememberedDeveloperCertificatePassword()
+        )
         identities = SigningService.identities()
         if let selected = SigningCertificateLibrary.selected() {
             selectedIdentity = identities.first { $0.id.caseInsensitiveCompare(selected.identityID) == .orderedSame }
             p12URL = SigningCertificateLibrary.p12URL(for: selected)
-            p12Password = SigningCertificateLibrary.password(for: selected.id) ?? p12Password
+            p12Password = SigningService.resolvedDeveloperCertificatePassword(
+                SigningCertificateLibrary.password(for: selected.id)
+            )
         } else if let id = SigningService.rememberedDeveloperCertificateIdentityID() {
             selectedIdentity = identities.first { $0.id.caseInsensitiveCompare(id) == .orderedSame }
+        }
+    }
+
+    private func importProfiles(_ urls: [URL]) {
+        let accepted = urls.filter { ["mobileprovision", "provisionprofile"].contains($0.pathExtension.lowercased()) }
+        for url in accepted where !importedProfiles.contains(url) {
+            importedProfiles.append(url)
+        }
+        remapImportedProfiles()
+        if bundleIDs.count == 1, let only = bundleIDs.first, let url = accepted.first, profilesByBundleID[only] == nil {
+            profilesByBundleID[only] = url
+        }
+    }
+
+    private func remapImportedProfiles() {
+        guard !bundleIDs.isEmpty, !importedProfiles.isEmpty else { return }
+        let mapped = SigningService.mapProfiles(importedProfiles, onto: bundleIDs)
+        for (bundleID, url) in mapped where profilesByBundleID[bundleID] == nil {
+            profilesByBundleID[bundleID] = url
         }
     }
 
@@ -734,12 +880,17 @@ struct DeveloperSigningPicker: View {
         identities = SigningService.identities()
         selectedIdentity = identities.first { $0.id.caseInsensitiveCompare(cert.identityID) == .orderedSame }
         p12URL = SigningCertificateLibrary.p12URL(for: cert)
-        p12Password = SigningCertificateLibrary.password(for: cert.id) ?? ""
+        p12Password = SigningService.resolvedDeveloperCertificatePassword(
+            SigningCertificateLibrary.password(for: cert.id)
+        )
     }
 
     private func importP12() {
         guard let url = p12URL else { return }
-        let password = p12Password
+        let password = SigningService.resolvedDeveloperCertificatePassword(p12Password)
+        if p12Password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            p12Password = password
+        }
         certificateBusy = true
         certificateMessage = ""
         Task {
@@ -752,7 +903,17 @@ struct DeveloperSigningPicker: View {
                 identities = SigningService.identities()
                 selectedIdentity = identity
                 library = SigningCertificateLibrary.load()
-                certificateMessage = L("signingtab.p12Imported")
+                if let profileTeam = SigningService.unmatchedProfileTeams(
+                    profiles: importedProfiles,
+                    identity: identity
+                ).first {
+                    let certTeam = SigningService.certificateDetails(for: identity).teamID
+                        ?? SigningService.teamID(fromIdentityName: identity.name)
+                        ?? ""
+                    certificateMessage = "❌ " + L("signingtab.teamMismatch", certTeam, profileTeam)
+                } else {
+                    certificateMessage = L("signingtab.p12Imported")
+                }
             } catch {
                 certificateMessage = "❌ " + error.localizedDescription
             }

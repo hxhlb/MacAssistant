@@ -100,9 +100,6 @@ struct AboutView: View {
                                 Button(L("about.thirdParty.zsign")) {
                                     NSWorkspace.shared.open(ProductLinks.zsignProject)
                                 }
-                                Button(L("about.thirdParty.ipatool")) {
-                                    NSWorkspace.shared.open(ProductLinks.ipatoolProject)
-                                }
                                 Button(L("about.thirdParty.classDump")) {
                                     NSWorkspace.shared.open(ProductLinks.classDumpProject)
                                 }

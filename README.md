@@ -48,7 +48,7 @@
 
 - **DEB** — create, inspect, unpack, convert and rebuild packages
 - **DYLIB** — inspect dependencies, extract libraries and rewrite install names or rpaths
-- **IPA** — drag-in workbench, install and extract (as-is, no FairPlay dump), optional App Store download via local `ipatool` (own Apple ID, still encrypted), injection, thinning, header extraction, layered signing, and Apple ID signing
+- **IPA** — drag-in workbench, install and extract (as-is, no FairPlay dump), injection, thinning, header extraction, layered signing, and Apple ID signing
 - **Mach-O** — native Swift inspection and dylib injection for thin or universal binaries
 - **Environment check** — find required tools and get guided setup actions
 
@@ -72,7 +72,7 @@ Updates and notes: [X @iOSRXWY](https://x.com/iOSRXWY) · [Telegram](https://t.m
 
 ### First launch blocked by macOS?
 
-This public beta is **ad-hoc signed and not notarized**. Open the app once, then go to **System Settings → Privacy & Security → Open Anyway**. Do not turn Gatekeeper off.
+This 1.0 release is **ad-hoc signed and not notarized**. Open the app once, then go to **System Settings → Privacy & Security → Open Anyway**. Do not turn Gatekeeper off.
 
 ## Build
 
@@ -90,7 +90,7 @@ open "dist/Mac小助手.app"
 </p>
 
 <p align="center">
-  <img src="https://progress-bar.xyz/1/?scale=100&title=goal&width=420&color=0A84FF&suffix=%20/%20100" alt="Star goal: 1 / 100">
+  <img src="https://progress-bar.xyz/dynamic/json/?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fiosrxwy%2FMacAssistant&query=%24.stargazers_count&scale=100&title=goal&width=420&color=0A84FF&suffix=%20/%20100&cache=3600" alt="Star goal">
 </p>
 
 <p align="center">
@@ -134,7 +134,7 @@ open "dist/Mac小助手.app"
 
 ## Thanks
 
-[AltSign](https://github.com/rileytestut/AltSign) / [AltStore](https://github.com/altstoreio/AltStore) · [xtool](https://github.com/xtool-org/xtool) · [libimobiledevice](https://libimobiledevice.org) · [Theos](https://github.com/theos/theos) · [zsign](https://github.com/zhlynn/zsign) · [ipatool](https://github.com/majd/ipatool)
+[AltSign](https://github.com/rileytestut/AltSign) / [AltStore](https://github.com/altstoreio/AltStore) · [xtool](https://github.com/xtool-org/xtool) · [libimobiledevice](https://libimobiledevice.org) · [Theos](https://github.com/theos/theos) · [zsign](https://github.com/zhlynn/zsign)
 
 None of these binaries are bundled.
 

@@ -95,6 +95,68 @@ final class BundleMachOWorkflowTests: XCTestCase {
         return app
     }
 
+    func testPreferredInjectionHostRanksThreeThenTwoThenLite() throws {
+        let root = try FileSystemHelper.makeTemporaryDirectory(prefix: "preferred-host")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appendingPathComponent("WeChat.app")
+        try writeBundle(app, executable: "WeChat", bundleID: "com.tencent.wx", machO: thinMachO())
+        try writeBundle(
+            app.appendingPathComponent("Frameworks/ProtobufLite.framework"),
+            executable: "ProtobufLite",
+            bundleID: "com.tencent.protobuf",
+            machO: thinMachO()
+        )
+        XCTAssertEqual(
+            PreferredInjectionHost.relativePath(in: app),
+            "Frameworks/ProtobufLite.framework/ProtobufLite"
+        )
+
+        try writeBundle(
+            app.appendingPathComponent("Frameworks/ProtobufLite2.framework"),
+            executable: "ProtobufLite2",
+            bundleID: "com.tencent.protobuf2",
+            machO: thinMachO()
+        )
+        XCTAssertEqual(
+            PreferredInjectionHost.relativePath(in: app),
+            "Frameworks/ProtobufLite2.framework/ProtobufLite2"
+        )
+
+        try writeBundle(
+            app.appendingPathComponent("Frameworks/ProtobufLite3.framework"),
+            executable: "ProtobufLite3",
+            bundleID: "com.tencent.protobuf3",
+            machO: thinMachO()
+        )
+        XCTAssertEqual(
+            PreferredInjectionHost.relativePath(in: app),
+            "Frameworks/ProtobufLite3.framework/ProtobufLite3"
+        )
+        XCTAssertEqual(
+            PreferredInjectionHost.relativePath(in: app, preferring: .protobufLite2),
+            "Frameworks/ProtobufLite2.framework/ProtobufLite2"
+        )
+
+        let session = try InjectionTargetDiscovery.open(.app(app))
+        let recommended = session.targets.filter(\.isRecommended)
+        XCTAssertEqual(recommended.map(\.relativePath), ["WeChat"])
+        XCTAssertTrue(session.targets.first { $0.kind == .mainExecutable }?.isRecommended ?? false)
+        XCTAssertFalse(session.targets.contains { $0.relativePath.contains("ProtobufLite") && $0.isRecommended })
+    }
+
+    func testPreferredInjectionHostAcceptsBareProtobufLite3File() throws {
+        let root = try FileSystemHelper.makeTemporaryDirectory(prefix: "preferred-bare")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appendingPathComponent("WeChat.app")
+        try writeBundle(app, executable: "WeChat", bundleID: "com.tencent.wx", machO: thinMachO())
+        try FileManager.default.createDirectory(
+            at: app.appendingPathComponent("Frameworks", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try thinMachO().write(to: app.appendingPathComponent("Frameworks/ProtobufLite3"))
+        XCTAssertEqual(PreferredInjectionHost.relativePath(in: app), "Frameworks/ProtobufLite3")
+    }
+
     func testTargetDiscoveryFindsStructuredTargetsAndSkipsInvalidExecutable() throws {
         let root = try FileSystemHelper.makeTemporaryDirectory(prefix: "targets-fixture")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -200,5 +262,14 @@ final class BundleMachOWorkflowTests: XCTestCase {
         XCTAssertTrue(text.contains(path.path))
         XCTAssertTrue(text.contains("文件与文件夹"))
         XCTAssertTrue(text.contains("选择的文件"))
+        // zip 写只读快照目录失败时文案里也有 Permission denied，那不是 TCC。
+        XCTAssertFalse(
+            FileSystemHelper.isAccessPermissionError(
+                IpaError.commandFailed(
+                    "zip I/O error: Permission denied\nzip error: Could not create output file"
+                )
+            )
+        )
+        XCTAssertTrue(FileSystemHelper.isAccessPermissionError(CocoaError(.fileReadNoPermission)))
     }
 }

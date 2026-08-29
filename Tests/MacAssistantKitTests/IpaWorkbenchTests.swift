@@ -17,6 +17,8 @@ final class IpaWorkbenchTests: XCTestCase {
             ("Bar.bundle", .bundle),
             ("dev.mobileprovision", .provisioningProfile),
             ("dev.provisionprofile", .provisioningProfile),
+            ("cert.p12", .developerCertificate),
+            ("cert.pfx", .developerCertificate),
         ]
         for (name, expected) in cases {
             let url = URL(fileURLWithPath: "/tmp/\(name)")
@@ -59,18 +61,67 @@ final class IpaWorkbenchTests: XCTestCase {
         XCTAssertFalse(decision.canExecute)
     }
 
-    func testSigningDecisionWaitsWhenProfileMissingForAppex() {
+    func testSigningDecisionReadyWithP12FileAndPasswordWithoutIdentity() {
+        let p12 = URL(fileURLWithPath: "/tmp/team.p12")
+        let provision = URL(fileURLWithPath: "/tmp/app.mobileprovision")
+        let decision = WorkspaceSigningPlanner.decide(
+            identity: nil,
+            profilesByBundleID: [:],
+            requiredBundleIDs: ["com.demo.app"],
+            extraProfiles: [provision],
+            certificateURL: p12,
+            certificatePassword: "1",
+            method: .p12
+        )
+        guard case let .readyToSign(recipe) = decision else {
+            return XCTFail("有 p12 文件、密码和描述文件就应能执行，不必导入钥匙串")
+        }
+        XCTAssertEqual(recipe.p12URL, p12)
+        XCTAssertEqual(recipe.p12Password, "1")
+        XCTAssertEqual(recipe.profilesByBundleID["com.demo.app"], provision)
+        XCTAssertTrue(decision.canExecute)
+    }
+
+    func testSigningDecisionWaitsWhenP12PasswordEmpty() {
+        let decision = WorkspaceSigningPlanner.decide(
+            identity: nil,
+            profilesByBundleID: [:],
+            requiredBundleIDs: ["com.demo.app"],
+            extraProfiles: [URL(fileURLWithPath: "/tmp/app.mobileprovision")],
+            certificateURL: URL(fileURLWithPath: "/tmp/team.p12"),
+            certificatePassword: "  ",
+            method: .p12
+        )
+        XCTAssertTrue(decision.isWaiting)
+        XCTAssertFalse(decision.canExecute)
+    }
+
+    func testSigningDecisionReadyWithOneProfileForWholeIPA() {
         let decision = WorkspaceSigningPlanner.decide(
             identity: identity,
             profilesByBundleID: ["com.demo.app": URL(fileURLWithPath: "/tmp/app.mobileprovision")],
             requiredBundleIDs: ["com.demo.app", "com.demo.app.ext"]
         )
-        guard case let .waitingForAssets(missingIdentity, missingProfiles) = decision else {
-            return XCTFail("应停在等待签名材料")
+        guard case let .readyToSign(recipe) = decision else {
+            return XCTFail("zsign 一份描述文件就应就绪，不等每个 appex")
         }
-        XCTAssertFalse(missingIdentity)
-        XCTAssertEqual(missingProfiles, ["com.demo.app.ext"])
-        XCTAssertFalse(decision.canExecute)
+        XCTAssertEqual(recipe.identityID, "SHA1")
+        XCTAssertNotNil(recipe.profilesByBundleID["com.demo.app"])
+        XCTAssertTrue(decision.canExecute)
+    }
+
+    func testSigningDecisionReadyWhenUnmappedProfileIsDropped() {
+        let provision = URL(fileURLWithPath: "/tmp/unmapped.mobileprovision")
+        let decision = WorkspaceSigningPlanner.decide(
+            identity: identity,
+            profilesByBundleID: [:],
+            requiredBundleIDs: ["com.demo.app"],
+            extraProfiles: [provision]
+        )
+        guard case let .readyToSign(recipe) = decision else {
+            return XCTFail("对不上 bundle 的描述文件仍应交给 zsign")
+        }
+        XCTAssertEqual(recipe.profilesByBundleID["com.demo.app"], provision)
     }
 
     func testSigningDecisionReadyWhenComplete() {
@@ -163,6 +214,73 @@ final class IpaWorkbenchTests: XCTestCase {
         }
     }
 
+    func testExplicitNoneIgnoresReadySideloadMaterials() {
+        let profiles = ["com.demo.app": URL(fileURLWithPath: "/tmp/app.mobileprovision")]
+        let appleID = AppleIDSigningRecipe(
+            appleID: "a@b.com",
+            teamID: "TEAM",
+            deviceUDID: "00008030-001A2B3C4D5E6F70"
+        )
+        let decision = WorkspaceSigningPlanner.decide(
+            identity: identity,
+            profilesByBundleID: profiles,
+            requiredBundleIDs: ["com.demo.app"],
+            appleID: appleID,
+            method: SideloadSigningChoice.none
+        )
+        XCTAssertEqual(decision, .unsigned)
+        XCTAssertTrue(decision.canExecute)
+    }
+
+    func testExplicitAppleIDIgnoresCompleteP12() {
+        let profiles = ["com.demo.app": URL(fileURLWithPath: "/tmp/app.mobileprovision")]
+        let appleID = AppleIDSigningRecipe(
+            appleID: "a@b.com",
+            teamID: "TEAM",
+            deviceUDID: "00008030-001A2B3C4D5E6F70"
+        )
+        let decision = WorkspaceSigningPlanner.decide(
+            identity: identity,
+            profilesByBundleID: profiles,
+            requiredBundleIDs: ["com.demo.app"],
+            appleID: appleID,
+            method: .appleID
+        )
+        guard case .readyToSignWithAppleID = decision else {
+            return XCTFail("选了 Apple ID 侧载就不应改走 p12")
+        }
+    }
+
+    func testExplicitP12IgnoresCompleteAppleID() {
+        let profiles = ["com.demo.app": URL(fileURLWithPath: "/tmp/app.mobileprovision")]
+        let appleID = AppleIDSigningRecipe(
+            appleID: "a@b.com",
+            teamID: "TEAM",
+            deviceUDID: "00008030-001A2B3C4D5E6F70"
+        )
+        let decision = WorkspaceSigningPlanner.decide(
+            identity: identity,
+            profilesByBundleID: profiles,
+            requiredBundleIDs: ["com.demo.app"],
+            appleID: appleID,
+            method: .p12
+        )
+        guard case .readyToSign = decision else {
+            return XCTFail("选了 P12 侧载就不应改走 Apple ID")
+        }
+    }
+
+    func testExplicitP12WaitsWhenMaterialsMissing() {
+        let decision = WorkspaceSigningPlanner.decide(
+            identity: nil,
+            profilesByBundleID: [:],
+            requiredBundleIDs: ["com.demo.app"],
+            method: .p12
+        )
+        XCTAssertTrue(decision.isWaiting)
+        XCTAssertFalse(decision.canExecute)
+    }
+
     func testProfileAppIDMatching() {
         XCTAssertTrue(IpaWorkbenchControllerMatch("TEAM.com.demo.app", "com.demo.app"))
         XCTAssertTrue(IpaWorkbenchControllerMatch("TEAM.com.demo.*", "com.demo.app"))
@@ -189,11 +307,89 @@ final class IpaWorkbenchTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: snapshot.snapshotURL), originalBytes)
         // 硬要求:快照在文件系统层面**无法**被原地改写。
         XCTAssertThrowsError(try Data("tampered".utf8).write(to: snapshot.snapshotURL)) { _ in }
+        // 根目录 0o555：在快照旁边新建 `.injected.ipa` 也必须失败。执行器若把产物写到这里，
+        // zip 会报 Permission denied，并被误展示成「完全磁盘访问」。
+        let injectedBesideSnapshot = snapshot.snapshotURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("Payload.injected.ipa")
+        XCTAssertThrowsError(try Data("injected".utf8).write(to: injectedBesideSnapshot)) { _ in }
         // 原始输入未被触碰。
         XCTAssertEqual(try Data(contentsOf: original), originalBytes)
         // 记录了原始 hash。
         XCTAssertEqual(snapshot.sha256, try DylibService.sha256(fileAt: original))
         XCTAssertFalse(snapshot.sha256.isEmpty)
+    }
+
+    @MainActor
+    func testProposedOutputURLSitsBesideOriginalNotSnapshot() throws {
+        let dir = try FileSystemHelper.makeTemporaryDirectory(prefix: "snap-out")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let original = dir.appendingPathComponent("WeChat_8075_管替.ipa")
+        try Data("ipa".utf8).write(to: original)
+
+        let controller = IpaWorkbenchController()
+        controller.adoptSnapshot(try ImmutableSourceSnapshot.make(of: original))
+
+        let output = try XCTUnwrap(controller.proposedOutputURL)
+        XCTAssertEqual(output.lastPathComponent, "WeChat_8075_管替.injected.ipa")
+        XCTAssertEqual(output.deletingLastPathComponent(), dir)
+        XCTAssertNotEqual(
+            output.deletingLastPathComponent(),
+            controller.snapshot?.snapshotURL.deletingLastPathComponent()
+        )
+    }
+
+    func testExecuteFromReadOnlySnapshotWritesOutsideSnapshotDirectory() throws {
+        for tool in [ExternalTool.clang, .zip, .unzip, .otool] where !tool.isAvailable {
+            throw XCTSkip("缺少 \(tool.commandName)")
+        }
+        let root = try FileSystemHelper.makeTemporaryDirectory(prefix: "snap-exec")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let ipaRoot = root.appendingPathComponent("ipaRoot")
+        let app = ipaRoot.appendingPathComponent("Payload/Demo.app")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        let info: [String: Any] = [
+            "CFBundleExecutable": "Demo",
+            "CFBundleIdentifier": "com.example.demo",
+            "CFBundleName": "Demo",
+        ]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: app.appendingPathComponent("Info.plist"))
+
+        let source = root.appendingPathComponent("source.c")
+        try "int main(void) { return 0; }\n".write(to: source, atomically: true, encoding: .utf8)
+        let main = app.appendingPathComponent("Demo")
+        XCTAssertTrue(try Shell.run(
+            ExternalTool.clang.path!,
+            ["-o", main.path, source.path, "-Wl,-headerpad,0x1000"]
+        ).succeeded)
+        let plugin = root.appendingPathComponent("Hook.dylib")
+        XCTAssertTrue(try Shell.run(
+            ExternalTool.clang.path!,
+            ["-dynamiclib", "-o", plugin.path, source.path, "-Wl,-headerpad,0x1000"]
+        ).succeeded)
+
+        let original = root.appendingPathComponent("WeChat_8075_管替.ipa")
+        XCTAssertTrue(try ExternalTool.zip.run(
+            ["-qry", original.path, "Payload"],
+            currentDirectory: ipaRoot
+        ).succeeded)
+
+        let snapshot = try ImmutableSourceSnapshot.make(of: original)
+        let result = try IpaInjectionWorkflow.execute(
+            InjectionPlan(
+                input: snapshot.injectionInput,
+                items: [InjectionItem(dylibURL: plugin)],
+                signing: .none
+            )
+        )
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.outputURL.path))
+        XCTAssertFalse(
+            result.outputURL.path.hasPrefix(snapshot.snapshotURL.deletingLastPathComponent().path + "/")
+        )
+        XCTAssertEqual(try Data(contentsOf: original), try Data(contentsOf: snapshot.snapshotURL))
     }
 
     func testSourceSnapshotInjectionInputMatchesExtension() throws {
@@ -253,17 +449,25 @@ final class IpaWorkbenchTests: XCTestCase {
             RecipeTargetMapping(
                 dylibName: "b.dylib",
                 targetRelativePath: "PlugIns/Ext.appex/Ext",
+                injectionHost: .preferredFramework,
                 loadKind: .weak,
                 existingPolicy: .skip
             ),
         ]
-        recipe.fileAccessBehavior = .require
+        recipe.leaveUnsigned = true
+        recipe.metadata.bundleID = "com.example.rewritten"
+        recipe.components.watch = .remove
         let data = try recipe.encoded()
         let decoded = try InjectionRecipe.decode(data)
         XCTAssertEqual(decoded, recipe)
         XCTAssertEqual(decoded.finalDylibName, "b.dylib")
         XCTAssertEqual(decoded.mapping(for: "b.dylib")?.targetRelativePath, "PlugIns/Ext.appex/Ext")
-        XCTAssertEqual(decoded.fileAccessBehavior, .require)
+        XCTAssertEqual(decoded.mapping(for: "b.dylib")?.injectionHost, .preferredFramework)
+        XCTAssertEqual(decoded.mapping(for: "a.dylib")?.injectionHost, .automatic)
+        XCTAssertTrue(decoded.leaveUnsigned)
+        XCTAssertEqual(decoded.sideloadSigning, .none)
+        XCTAssertEqual(decoded.metadata.bundleID, "com.example.rewritten")
+        XCTAssertEqual(decoded.components.watch, .remove)
     }
 
     func testRecipeSaveLoad() throws {
@@ -291,6 +495,11 @@ final class IpaWorkbenchTests: XCTestCase {
             try InjectionRecipe.decode(missing).schemaVersion,
             InjectionRecipe.currentSchemaVersion
         )
+        // 缺字段的旧预设保持原先会签名的行为；新工作台 init 才默认勾选仅修改。
+        XCTAssertFalse(try InjectionRecipe.decode(missing).leaveUnsigned)
+        // 旧预设里的 macOS 文件访问字段直接忽略，不再影响执行。
+        let legacyAccess = Data(#"{"name":"x","fileAccessBehavior":"require"}"#.utf8)
+        XCTAssertEqual(try InjectionRecipe.decode(legacyAccess).name, "x")
     }
 
     // MARK: - 工作项 1(诚实报告):未确认依赖写进审计,脱敏后仍保留
@@ -340,7 +549,7 @@ final class IpaWorkbenchTests: XCTestCase {
             signing: .adHoc
         ))
         XCTAssertEqual(plan.items.count, 2)
-        // 主插件无映射 → 落到主 executable。
+        // 主插件无映射、未点名宿主 → 只打主程序，不自动改 Frameworks。
         XCTAssertEqual(plan.items[0].target, .mainExecutable)
         // helper 有相对路径映射 → 落到指定 Mach-O。
         if case let .relativeMachO(path) = plan.items[1].target {
@@ -352,6 +561,110 @@ final class IpaWorkbenchTests: XCTestCase {
         // Framework 资源落到 IPA 的 Frameworks 目录。
         XCTAssertEqual(plan.resources.count, 1)
         XCTAssertEqual(plan.resources[0].destination.rawValue, "Frameworks/Dep.framework")
+    }
+
+    func testPlanAssemblyAutomaticHostKeepsEveryDylibOnMainExecutable() throws {
+        let recipe = InjectionRecipe(name: "p")
+        XCTAssertEqual(recipe.injectionHost, .automatic)
+        let plan = try WorkspacePlanAssembler.makePlan(.init(
+            input: .ipa(URL(fileURLWithPath: "/tmp/A.ipa")),
+            orderedDylibs: [
+                URL(fileURLWithPath: "/tmp/MMlibAntiDetect.dylib"),
+                URL(fileURLWithPath: "/tmp/WCRefine.dylib")
+            ],
+            recipe: recipe,
+            signing: .none
+        ))
+        XCTAssertEqual(plan.items.map(\.target), [.mainExecutable, .mainExecutable])
+    }
+
+    func testPlanAssemblyPinsNamedProtobufLiteHostOnlyOnThatDylib() throws {
+        var recipe = InjectionRecipe(name: "p")
+        recipe.injectionHost = .protobufLite2
+        recipe.targetMappings = [
+            RecipeTargetMapping(
+                dylibName: "Hook.dylib",
+                injectionHost: .protobufLite2
+            )
+        ]
+        let plan = try WorkspacePlanAssembler.makePlan(.init(
+            input: .ipa(URL(fileURLWithPath: "/tmp/A.ipa")),
+            orderedDylibs: [
+                URL(fileURLWithPath: "/tmp/MMlibAntiDetect.dylib"),
+                URL(fileURLWithPath: "/tmp/Hook.dylib")
+            ],
+            recipe: recipe,
+            signing: .adHoc
+        ))
+        XCTAssertEqual(plan.items[0].target, .mainExecutable)
+        XCTAssertEqual(plan.items[1].target, .namedFrameworkHost("ProtobufLite2"))
+    }
+
+    func testPlanAssemblyIgnoresGlobalInjectionHost() throws {
+        var recipe = InjectionRecipe(name: "p")
+        recipe.injectionHost = .protobufLite
+        let plan = try WorkspacePlanAssembler.makePlan(.init(
+            input: .ipa(URL(fileURLWithPath: "/tmp/A.ipa")),
+            orderedDylibs: [
+                URL(fileURLWithPath: "/tmp/MMlibAntiDetect.dylib"),
+                URL(fileURLWithPath: "/tmp/WCRefine.dylib")
+            ],
+            recipe: recipe,
+            signing: .none
+        ))
+        XCTAssertEqual(plan.items.map(\.target), [.mainExecutable, .mainExecutable])
+    }
+
+    func testPlanAssemblyPreferredFrameworkIsPerDylibOption() throws {
+        var recipe = InjectionRecipe(name: "p")
+        recipe.targetMappings = [
+            RecipeTargetMapping(
+                dylibName: "OptionalHost.dylib",
+                injectionHost: .preferredFramework
+            )
+        ]
+        let plan = try WorkspacePlanAssembler.makePlan(.init(
+            input: .ipa(URL(fileURLWithPath: "/tmp/A.ipa")),
+            orderedDylibs: [
+                URL(fileURLWithPath: "/tmp/MMlibAntiDetect.dylib"),
+                URL(fileURLWithPath: "/tmp/OptionalHost.dylib")
+            ],
+            recipe: recipe,
+            signing: .none
+        ))
+        XCTAssertEqual(plan.items[0].target, .mainExecutable)
+        XCTAssertEqual(plan.items[1].target, .preferredFrameworkHost)
+    }
+
+    @MainActor
+    func testSetPluginInjectionHostWritesOnlyThatMapping() throws {
+        let controller = IpaWorkbenchController()
+        controller.ingestSimpleInputs([
+            URL(fileURLWithPath: "/tmp/MMlibAntiDetect.dylib"),
+            URL(fileURLWithPath: "/tmp/WCRefine.dylib")
+        ])
+        XCTAssertEqual(controller.plugins.count, 2)
+        controller.setPluginInjectionHost(controller.plugins[0].id, .preferredFramework)
+        XCTAssertEqual(controller.injectionHost(for: controller.plugins[0]), .preferredFramework)
+        XCTAssertEqual(controller.injectionHost(for: controller.plugins[1]), .automatic)
+        let plan = try WorkspacePlanAssembler.makePlan(.init(
+            input: .ipa(URL(fileURLWithPath: "/tmp/A.ipa")),
+            orderedDylibs: controller.plugins.map(\.dylibURL),
+            recipe: controller.recipe,
+            signing: .none
+        ))
+        XCTAssertEqual(plan.items[0].target, .preferredFrameworkHost)
+        XCTAssertEqual(plan.items[1].target, .mainExecutable)
+    }
+
+    func testLegacyRecipeJSONDefaultsInjectionHostToAutomatic() throws {
+        let data = Data(#"{"schemaVersion":1,"name":"x"}"#.utf8)
+        let recipe = try InjectionRecipe.decode(data)
+        XCTAssertEqual(recipe.injectionHost, .automatic)
+        let mappingJSON = Data(#"{"dylibName":"Foo.dylib"}"#.utf8)
+        let mapping = try JSONDecoder().decode(RecipeTargetMapping.self, from: mappingJSON)
+        XCTAssertEqual(mapping.injectionHost, .automatic)
+        XCTAssertEqual(try mapping.resolvedTarget(), .mainExecutable)
     }
 
     func testFinalDylibPositionFromResult() {
@@ -394,8 +707,14 @@ final class IpaWorkbenchTests: XCTestCase {
         let controller = IpaWorkbenchController()
         controller.adoptSnapshot(try ImmutableSourceSnapshot.make(of: ipa))
         controller.ingestSimpleInputs([URL(fileURLWithPath: "/tmp/Main.dylib")])
-        XCTAssertNotNil(controller.selectedMainPlugin)
+        XCTAssertEqual(controller.enabledPlugins.count, 1)
         // 未跑预检、无其它阻断 → 可执行(预检是可选的前置检查,不跑不因此拦)。
+        XCTAssertTrue(controller.canExecute)
+
+        controller.setPluginEnabled(controller.plugins[0].id, false)
+        XCTAssertTrue(controller.enabledPlugins.isEmpty)
+        XCTAssertFalse(controller.canExecute)
+        controller.setPluginEnabled(controller.plugins[0].id, true)
         XCTAssertTrue(controller.canExecute)
 
         let blocker = IpaPreflightFinding(severity: .blocker, code: "x.blocker", message: "boom")
@@ -448,5 +767,170 @@ final class IpaWorkbenchTests: XCTestCase {
         controller.recordExecution(result, toolVersion: "v")
         XCTAssertEqual(controller.audit?.unconfirmedDependencies, [dep])
         XCTAssertNotNil(controller.executionResult, "结果原件需保留,供 UI 展示未确认依赖与 diff")
+    }
+
+    func testSourceMetadataFillsFromPlistAndDetectsWeChat() {
+        XCTAssertTrue(AppBundleMetadataSummary.isWeChat(bundleID: "com.tencent.xin"))
+        XCTAssertTrue(AppBundleMetadataSummary.isWeChat(bundleID: "com.tencent.xin.iosrxwy"))
+        XCTAssertTrue(AppBundleMetadataSummary.isWeChat(bundleID: "com.example.x", executable: "WeChat"))
+        XCTAssertFalse(AppBundleMetadataSummary.isWeChat(bundleID: "com.tencent.mqq"))
+
+        let summary = AppBundleMetadataSummary.from(
+            plist: [
+                "CFBundleDisplayName": "微信",
+                "CFBundleIdentifier": "com.tencent.xin",
+                "CFBundleShortVersionString": "8.0.60",
+                "MinimumOSVersion": "15.0",
+                "CFBundleExecutable": "WeChat",
+            ],
+            fallbackName: "WeChat.app"
+        )
+        XCTAssertEqual(summary.displayName, "微信")
+        XCTAssertEqual(summary.bundleID, "com.tencent.xin")
+        XCTAssertEqual(summary.shortVersion, "8.0.60")
+        XCTAssertEqual(summary.minimumOSVersion, "15.0")
+        XCTAssertTrue(summary.isWeChat)
+    }
+
+    @MainActor
+    func testNewWorkbenchEnablesFileSharingByDefault() {
+        XCTAssertTrue(IpaWorkbenchController().recipe.metadata.enableFileSharing)
+        let controller = IpaWorkbenchController()
+        controller.recipe.metadata.enableFileSharing = false
+        XCTAssertFalse(controller.recipe.metadata.enableFileSharing)
+    }
+
+    @MainActor
+    func testNewWorkbenchLeavesUnsignedByDefault() {
+        let controller = IpaWorkbenchController()
+        XCTAssertTrue(controller.recipe.leaveUnsigned)
+        XCTAssertEqual(controller.recipe.sideloadSigning, .none)
+        XCTAssertEqual(controller.signingDecision, .unsigned)
+        if case .none = controller.resolvedSigningMode {} else {
+            XCTFail("默认仅修改配置时应跳过签名")
+        }
+        controller.recipe.leaveUnsigned = false
+        XCTAssertFalse(controller.recipe.leaveUnsigned)
+        XCTAssertEqual(controller.recipe.sideloadSigning, .appleID)
+    }
+
+    @MainActor
+    func testAdoptSnapshotClearsIdentityOverridesAndAppliesSourceMetadata() throws {
+        let controller = IpaWorkbenchController()
+        controller.recipe.metadata.displayName = "旧名字"
+        controller.recipe.metadata.bundleID = "com.old"
+        controller.recipe.metadata.enableFileSharing = true
+        controller.applySourceMetadata(
+            AppBundleMetadataSummary(displayName: "微信", bundleID: "com.tencent.xin", isWeChat: true)
+        )
+        XCTAssertTrue(controller.isWeChatTarget)
+
+        let dir = try FileSystemHelper.makeTemporaryDirectory(prefix: "wb-meta")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ipa = dir.appendingPathComponent("A.ipa")
+        try Data("x".utf8).write(to: ipa)
+        controller.adoptSnapshot(try ImmutableSourceSnapshot.make(of: ipa))
+        XCTAssertNil(controller.recipe.metadata.displayName)
+        XCTAssertNil(controller.recipe.metadata.bundleID)
+        XCTAssertTrue(controller.recipe.metadata.enableFileSharing)
+        XCTAssertNil(controller.sourceAppMetadata)
+        XCTAssertFalse(controller.isWeChatTarget)
+    }
+
+    func testPlanAssemblyAppliesDefaultMinimumOS() throws {
+        var recipe = InjectionRecipe(name: "p")
+        recipe.metadata.bundleID = "com.demo.multi"
+        let defaulted = try WorkspacePlanAssembler.makePlan(.init(
+            input: .ipa(URL(fileURLWithPath: "/tmp/A.ipa")),
+            orderedDylibs: [URL(fileURLWithPath: "/tmp/Main.dylib")],
+            recipe: recipe,
+            signing: .none
+        ))
+        XCTAssertEqual(defaulted.metadata.minimumOSVersion, InjectionMetadataChanges.defaultMinimumOSVersion)
+        XCTAssertEqual(defaulted.metadata.bundleID, "com.demo.multi")
+
+        recipe.metadata.minimumOSVersion = "16.0"
+        let pinned = try WorkspacePlanAssembler.makePlan(.init(
+            input: .ipa(URL(fileURLWithPath: "/tmp/A.ipa")),
+            orderedDylibs: [URL(fileURLWithPath: "/tmp/Main.dylib")],
+            recipe: recipe,
+            signing: .none
+        ))
+        XCTAssertEqual(pinned.metadata.minimumOSVersion, "16.0")
+    }
+
+    @MainActor
+    func testLeaveUnsignedForcesUnsignedEvenWithSigningMaterials() {
+        let controller = IpaWorkbenchController()
+        controller.applyTargetContext(identity: nil, requiredBundleIDs: ["com.demo.app"])
+        controller.selectedIdentity = identity
+        controller.appleIDRecipe = AppleIDSigningRecipe(
+            appleID: "a@b.com",
+            teamID: "TEAM",
+            deviceUDID: "00008030-001A2B3C4D5E6F70"
+        )
+        controller.recipe.leaveUnsigned = true
+        XCTAssertEqual(controller.signingDecision, .unsigned)
+        if case .none = controller.resolvedSigningMode {} else {
+            XCTFail("仅修改配置时必须强制不签名")
+        }
+
+        controller.recipe.leaveUnsigned = false
+        guard case .readyToSignWithAppleID = controller.signingDecision else {
+            return XCTFail("取消仅修改后应回到 Apple ID 就绪态")
+        }
+        if case .appleID = controller.resolvedSigningMode {} else {
+            XCTFail("取消仅修改且 Apple ID 齐备时应走 appleID")
+        }
+    }
+
+    @MainActor
+    func testIngestP12IsCertificateNotUnrecognized() {
+        let controller = IpaWorkbenchController()
+        let p12 = URL(fileURLWithPath: "/tmp/team.p12")
+        _ = controller.ingestSimpleInputs([p12])
+        XCTAssertEqual(controller.pendingCertificateURL, p12)
+        XCTAssertTrue(controller.unrecognized.isEmpty)
+        XCTAssertEqual(controller.recipe.sideloadSigning, SideloadSigningChoice.none)
+        XCTAssertFalse(controller.hasCertificateSideloadPair)
+    }
+
+    @MainActor
+    func testIngestP12AndProfileSelectsCertificateSideload() {
+        let controller = IpaWorkbenchController()
+        XCTAssertEqual(controller.recipe.sideloadSigning, SideloadSigningChoice.none)
+        _ = controller.ingestSimpleInputs([
+            URL(fileURLWithPath: "/tmp/team.p12"),
+            URL(fileURLWithPath: "/tmp/app.mobileprovision"),
+        ])
+        XCTAssertEqual(controller.pendingCertificateURL?.lastPathComponent, "team.p12")
+        XCTAssertEqual(controller.provisioningProfiles.count, 1)
+        XCTAssertTrue(controller.hasCertificateSideloadPair)
+        XCTAssertEqual(controller.recipe.sideloadSigning, .p12)
+        XCTAssertEqual(controller.developerCertificatePassword, "1")
+        controller.applyTargetContext(identity: nil, requiredBundleIDs: ["com.demo.app"])
+        XCTAssertTrue(controller.signingDecision.canExecute)
+        guard case let .readyToSign(recipe) = controller.signingDecision else {
+            return XCTFail("凑齐 p12、密码和描述文件后应可执行")
+        }
+        XCTAssertEqual(recipe.p12Password, "1")
+    }
+
+    @MainActor
+    func testIngestProfileThenP12SelectsCertificateSideload() {
+        let controller = IpaWorkbenchController()
+        _ = controller.ingestSimpleInputs([URL(fileURLWithPath: "/tmp/app.mobileprovision")])
+        XCTAssertEqual(controller.recipe.sideloadSigning, SideloadSigningChoice.none)
+        XCTAssertFalse(controller.hasCertificateSideloadPair)
+        _ = controller.ingestSimpleInputs([URL(fileURLWithPath: "/tmp/team.p12")])
+        XCTAssertTrue(controller.hasCertificateSideloadPair)
+        XCTAssertEqual(controller.recipe.sideloadSigning, .p12)
+    }
+
+    func testDefaultDeveloperCertificatePasswordIsOne() {
+        XCTAssertEqual(SigningService.defaultDeveloperCertificatePassword, "1")
+        XCTAssertEqual(SigningService.resolvedDeveloperCertificatePassword(nil), "1")
+        XCTAssertEqual(SigningService.resolvedDeveloperCertificatePassword("  "), "1")
+        XCTAssertEqual(SigningService.resolvedDeveloperCertificatePassword("secret"), "secret")
     }
 }

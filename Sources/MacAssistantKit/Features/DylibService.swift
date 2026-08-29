@@ -196,11 +196,33 @@ public enum DylibService {
         return result
     }
 
+    /// `otool -L` 会把 LC_ID_DYLIB 和真正的依赖列在一起。越狱插件的安装名常是
+    /// `/Library/MobileSubstrate/DynamicLibraries/Foo.dylib`，这时必须用 `-id`，
+    /// `-change` 改不到安装名，看起来就像「依赖没变」。
     @discardableResult
     public static func changeDependency(from old: String, to new: String, fileAt url: URL) throws -> CommandResult {
+        if (try? analyze(fileAt: url).installName) == old {
+            let result = try setInstallID(new, fileAt: url)
+            let leftover = try loadDependencyPaths(fileAt: url)
+            if leftover.contains(old) {
+                return try changeLoadDependency(from: old, to: new, fileAt: url)
+            }
+            return result
+        }
+        return try changeLoadDependency(from: old, to: new, fileAt: url)
+    }
+
+    /// `otool -L` 去掉安装名后剩下的真正 LC_LOAD_DYLIB。
+    public static func loadDependencyPaths(fileAt url: URL) throws -> [String] {
+        let installName = try analyze(fileAt: url).installName
+        return try dependencies(fileAt: url).map(\.path).filter { $0 != installName }
+    }
+
+    @discardableResult
+    private static func changeLoadDependency(from old: String, to new: String, fileAt url: URL) throws -> CommandResult {
         let result = try ExternalTool.installNameTool.run(["-change", old, new, url.path])
         guard result.succeeded else { throw DylibError.commandFailed(result.combinedOutput) }
-        let paths = try dependencies(fileAt: url).map(\.path)
+        let paths = try loadDependencyPaths(fileAt: url)
         guard paths.contains(new), !paths.contains(old) else {
             throw DylibError.noExpectedChange(L("dylib.error.dependencyUnchanged", old, new))
         }

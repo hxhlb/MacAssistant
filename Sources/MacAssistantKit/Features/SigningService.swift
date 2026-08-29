@@ -50,6 +50,7 @@ public enum SigningError: LocalizedError {
     case missingProfileMappings([String])
     case missingEmbeddedProfile
     case emptyExportPassword
+    case p12Unavailable
 
     public var errorDescription: String? {
         switch self {
@@ -70,11 +71,15 @@ public enum SigningError: LocalizedError {
             return L("signing.error.missingEmbeddedProfile")
         case .emptyExportPassword:
             return L("signing.error.emptyExportPassword")
+        case .p12Unavailable:
+            return L("signing.error.p12Unavailable")
         }
     }
 }
 
-/// 代码签名:越狱(ldid / ad-hoc)与真机(真实证书由内向外逐层重签)。
+/// 代码签名分两条路：
+/// - 电脑软件 / 越狱伪签名：`codesign`、`ldid`
+/// - 手机 IPA 真机证书：`IpaZsignSigner`（p12 + 一份描述文件）
 public enum SigningService {
 
     // MARK: 身份
@@ -222,6 +227,39 @@ public enum SigningService {
             teamID: teamID(fromIdentityName: identity.name),
             serial: nil
         )
+    }
+
+    /// 侧载 p12 常见默认密码。输入框预填，用户可改。
+    public static let defaultDeveloperCertificatePassword = "1"
+
+    /// 空密码按默认值 `1` 处理；已记住的密码原样返回。
+    public static func resolvedDeveloperCertificatePassword(_ stored: String?) -> String {
+        let trimmed = stored?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? defaultDeveloperCertificatePassword : trimmed
+    }
+
+    /// 描述文件 Team 与证书 Team 不一致时，返回对不上的描述文件 Team（去重）。
+    public static func unmatchedProfileTeams(
+        profiles: [URL],
+        identity: SigningIdentity
+    ) -> [String] {
+        let identityTeam = (certificateDetails(for: identity).teamID
+            ?? teamID(fromIdentityName: identity.name))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !identityTeam.isEmpty else { return [] }
+        var unmatched: [String] = []
+        var seen = Set<String>()
+        for url in profiles {
+            guard let team = (try? readProfile(at: url))?.teamID?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !team.isEmpty
+            else { continue }
+            if team.caseInsensitiveCompare(identityTeam) != .orderedSame,
+               seen.insert(team.uppercased()).inserted {
+                unmatched.append(team)
+            }
+        }
+        return unmatched
     }
 
     /// `Apple Development: Name (TEAMID)` 末尾括号。
@@ -422,6 +460,38 @@ public enum SigningService {
         return try parseProfile(plistData: Data(r.stdout.utf8))
     }
 
+    /// Profile `application-identifier` 形如 `TEAMID.com.foo.bar` 或 `TEAMID.com.foo.*`。
+    public static func profileAppID(_ appID: String, matches bundleID: String) -> Bool {
+        guard let dot = appID.firstIndex(of: ".") else { return false }
+        let allowed = String(appID[appID.index(after: dot)...])
+        if allowed.hasSuffix(".*") { return bundleID.hasPrefix(String(allowed.dropLast())) }
+        if allowed == "*" { return true }
+        return bundleID == allowed
+    }
+
+    /// 按 appID（含通配）把已解析的 profile 配到最终 Bundle ID。
+    public static func mapProfileAppIDs(
+        _ profiles: [(url: URL, appID: String)],
+        onto bundleIDs: [String]
+    ) -> [String: URL] {
+        var mapping: [String: URL] = [:]
+        for bundleID in bundleIDs {
+            if let match = profiles.first(where: { profileAppID($0.appID, matches: bundleID) }) {
+                mapping[bundleID] = match.url
+            }
+        }
+        return mapping
+    }
+
+    /// 读各 `.mobileprovision` 的 appID，再配到最终 Bundle ID。读失败的文件跳过。
+    public static func mapProfiles(_ urls: [URL], onto bundleIDs: [String]) -> [String: URL] {
+        let profiles = urls.compactMap { url -> (URL, String)? in
+            guard let info = try? readProfile(at: url), let appID = info.appID else { return nil }
+            return (url, appID)
+        }
+        return mapProfileAppIDs(profiles, onto: bundleIDs)
+    }
+
     static func parseProfile(plistData: Data) throws -> ProfileInfo {
         guard let dict = try? PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any] else {
             throw SigningError.profileParse(L("signing.profileParse.invalidPlist"))
@@ -589,9 +659,19 @@ public enum SigningService {
         }
     }
 
-    /// 真机重签:删旧签名 → 装 embedded.mobileprovision → (可选)改 bundle id →
-    /// 先签 Frameworks/PlugIns(不带主 App entitlements)→ 最后签主 App(带 entitlements)→ 校验。
+    /// 真机重签。iOS 包走 zsign；电脑 .app 仍走下面的 codesign。
     public static func resignRealDevice(app: URL, options: RealResignOptions, log: inout [String]) throws {
+        if IpaZsignSigner.isIOSAppBundle(app) {
+            try resignIOSAppWithZsign(
+                app: app,
+                identity: options.identity,
+                profilesByBundleID: [:],
+                overrideBundleID: options.overrideBundleID,
+                extraProfiles: [options.profileURL],
+                log: &log
+            )
+            return
+        }
         guard ExternalTool.codesign.isAvailable else { throw SigningError.toolMissing("codesign") }
 
         let profile = try readProfile(at: options.profileURL)
@@ -697,15 +777,50 @@ public enum SigningService {
         }.sorted()
     }
 
-    /// 真机签名图：主 App 与每个 appex/Watch App/AppClip/XPC 都必须有独立 profile。
+    /// 真机签名图。
+    /// iOS / IPA：zsign，一份描述文件签整包（和 LoadController 一样）。
+    /// 电脑 .app：仍按 bundle 映射走 codesign。
+    public static func resignRealDeviceGraph(
+        app: URL,
+        recipe: RealDeviceSigningRecipe,
+        overrideBundleID: String? = nil,
+        entitlementsPolicy: SigningEntitlementsPolicy = .requireAppSubsetOfProfile,
+        log: inout [String]
+    ) throws {
+        try resignRealDeviceGraph(
+            app: app,
+            identity: SigningIdentity(id: recipe.identityID, name: recipe.identityName),
+            profilesByBundleID: recipe.profilesByBundleID,
+            overrideBundleID: overrideBundleID,
+            entitlementsPolicy: entitlementsPolicy,
+            p12URL: recipe.p12URL,
+            p12Password: recipe.p12Password,
+            log: &log
+        )
+    }
+
     public static func resignRealDeviceGraph(
         app: URL,
         identity: SigningIdentity,
         profilesByBundleID: [String: URL],
         overrideBundleID: String? = nil,
         entitlementsPolicy: SigningEntitlementsPolicy = .requireAppSubsetOfProfile,
+        p12URL: URL? = nil,
+        p12Password: String? = nil,
         log: inout [String]
     ) throws {
+        if IpaZsignSigner.isIOSAppBundle(app) {
+            try resignIOSAppWithZsign(
+                app: app,
+                identity: identity,
+                profilesByBundleID: profilesByBundleID,
+                overrideBundleID: overrideBundleID,
+                p12URL: p12URL,
+                p12Password: p12Password,
+                log: &log
+            )
+            return
+        }
         guard ExternalTool.codesign.isAvailable else { throw SigningError.toolMissing("codesign") }
         if let overrideBundleID {
             try rewriteBundleIDGraph(in: app, rootBundleID: overrideBundleID)
@@ -964,49 +1079,183 @@ public enum SigningService {
 
     public static func resignIPARealDevice(ipaAt url: URL, options: RealResignOptions,
                                            output: URL? = nil) throws -> (URL, [String]) {
-        var log: [String] = []
-        let work = try FileSystemHelper.makeTemporaryDirectory(prefix: "sign-ipa")
-        defer { try? FileManager.default.removeItem(at: work) }
-        let extractDir = work.appendingPathComponent("x")
-        try IpaService.unzip(url, to: extractDir)
-        try IpaService.validatePayloadStructure(in: extractDir)
-        let app = try IpaService.locateApp(in: extractDir)
-        try resignRealDevice(app: app, options: options, log: &log)
-        let proposed = url.deletingPathExtension().appendingPathExtension("signed").appendingPathExtension("ipa")
-        let out = output ?? FileSystemHelper.uniqueOutputURL(basedOn: proposed)
-        try repackage(extractDir: extractDir, to: out)
-        log.append(L("signing.log.repackaged", out.lastPathComponent))
-        return (out, log)
+        let recipe = RealDeviceSigningRecipe(
+            identityID: options.identity.id,
+            identityName: options.identity.name,
+            profilesByBundleID: [:]
+        )
+        return try resignIPARealDeviceGraph(
+            ipaAt: url,
+            recipe: recipe,
+            overrideBundleID: options.overrideBundleID,
+            extraProfiles: [options.profileURL],
+            output: output
+        )
     }
 
-    /// IPA 真机签名图：主 App、appex、Watch App、App Clip、XPC 分别使用对应 profile。
+    /// 手机 IPA 证书签名：zsign 直接签整包，不再用 codesign 按扩展逐层签。
     public static func resignIPARealDeviceGraph(
         ipaAt url: URL,
         recipe: RealDeviceSigningRecipe,
         overrideBundleID: String? = nil,
         entitlementsPolicy: SigningEntitlementsPolicy = .requireAppSubsetOfProfile,
+        extraProfiles: [URL] = [],
         output: URL? = nil
     ) throws -> (URL, [String]) {
+        _ = entitlementsPolicy
         var log: [String] = []
-        let work = try FileSystemHelper.makeTemporaryDirectory(prefix: "sign-ipa-graph")
-        defer { try? FileManager.default.removeItem(at: work) }
-        let extractDir = work.appendingPathComponent("x")
-        try IpaService.unzip(url, to: extractDir)
-        try IpaService.validatePayloadStructure(in: extractDir)
-        let app = try IpaService.locateApp(in: extractDir)
-        try resignRealDeviceGraph(
-            app: app,
-            identity: SigningIdentity(id: recipe.identityID, name: recipe.identityName),
-            profilesByBundleID: recipe.profilesByBundleID,
-            overrideBundleID: overrideBundleID,
-            entitlementsPolicy: entitlementsPolicy,
-            log: &log
-        )
         let proposed = url.deletingPathExtension().appendingPathExtension("signed").appendingPathExtension("ipa")
         let out = output ?? FileSystemHelper.uniqueOutputURL(basedOn: proposed)
-        try repackage(extractDir: extractDir, to: out)
-        log.append(L("signing.log.repackaged", out.lastPathComponent))
+        let identity = SigningIdentity(id: recipe.identityID, name: recipe.identityName)
+        try resignIOSIpaWithZsign(
+            ipa: url,
+            output: out,
+            identity: identity,
+            profilesByBundleID: recipe.profilesByBundleID,
+            overrideBundleID: overrideBundleID,
+            extraProfiles: extraProfiles,
+            p12URL: recipe.p12URL,
+            p12Password: recipe.p12Password,
+            log: &log
+        )
         return (out, log)
+    }
+
+    /// 已解包的 iOS .app：zsign 就地重签，调用方再打包。
+    public static func resignIOSAppWithZsign(
+        app: URL,
+        identity: SigningIdentity,
+        profilesByBundleID: [String: URL],
+        overrideBundleID: String? = nil,
+        extraProfiles: [URL] = [],
+        p12URL: URL? = nil,
+        p12Password: String? = nil,
+        log: inout [String]
+    ) throws {
+        let materials = try prepareZsignMaterials(
+            identity: identity,
+            profilesByBundleID: profilesByBundleID,
+            overrideBundleID: overrideBundleID,
+            extraProfiles: extraProfiles,
+            p12URL: p12URL,
+            p12Password: p12Password
+        )
+        defer { materials.cleanup() }
+        try IpaZsignSigner.sign(
+            input: app,
+            p12URL: materials.p12URL,
+            p12Password: materials.p12Password,
+            provisionURL: materials.provisionURL,
+            bundleIDOverride: overrideBundleID,
+            log: &log
+        )
+    }
+
+    static func resignIOSIpaWithZsign(
+        ipa: URL,
+        output: URL,
+        identity: SigningIdentity,
+        profilesByBundleID: [String: URL],
+        overrideBundleID: String?,
+        extraProfiles: [URL],
+        p12URL: URL? = nil,
+        p12Password: String? = nil,
+        log: inout [String]
+    ) throws {
+        let materials = try prepareZsignMaterials(
+            identity: identity,
+            profilesByBundleID: profilesByBundleID,
+            overrideBundleID: overrideBundleID,
+            extraProfiles: extraProfiles,
+            p12URL: p12URL,
+            p12Password: p12Password
+        )
+        defer { materials.cleanup() }
+        try IpaZsignSigner.sign(
+            input: ipa,
+            p12URL: materials.p12URL,
+            p12Password: materials.p12Password,
+            provisionURL: materials.provisionURL,
+            outputIPA: output,
+            bundleIDOverride: overrideBundleID,
+            log: &log
+        )
+    }
+
+    private struct ZsignMaterials {
+        var p12URL: URL
+        var p12Password: String
+        var provisionURL: URL
+        var workDirectory: URL
+
+        func cleanup() {
+            try? FileManager.default.removeItem(at: workDirectory)
+        }
+    }
+
+    private static func prepareZsignMaterials(
+        identity: SigningIdentity,
+        profilesByBundleID: [String: URL],
+        overrideBundleID: String?,
+        extraProfiles: [URL],
+        p12URL: URL? = nil,
+        p12Password: String? = nil
+    ) throws -> ZsignMaterials {
+        guard ExternalTool.zsign.isAvailable else {
+            throw SigningError.toolMissing(IpaZsignSigner.installHint)
+        }
+        let provision = IpaZsignSigner.primaryProvision(
+            profilesByBundleID: profilesByBundleID,
+            preferring: overrideBundleID,
+            extraProfiles: extraProfiles
+        )
+        guard let provision else {
+            throw SigningError.missingProfileMappings(["mobileprovision"])
+        }
+        let profile = try readProfile(at: provision)
+        try validateZsignProfile(profile, identityName: identity.name)
+        let work = try FileSystemHelper.makeTemporaryDirectory(prefix: "ipa-zsign-cred")
+        do {
+            if let p12URL, FileManager.default.fileExists(atPath: p12URL.path) {
+                let password = resolvedDeveloperCertificatePassword(p12Password)
+                return ZsignMaterials(
+                    p12URL: p12URL,
+                    p12Password: password,
+                    provisionURL: provision,
+                    workDirectory: work
+                )
+            }
+            let p12 = try IpaZsignSigner.resolveP12(for: identity, workDirectory: work)
+            return ZsignMaterials(
+                p12URL: p12.url,
+                p12Password: p12.password,
+                provisionURL: provision,
+                workDirectory: work
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: work)
+            throw error
+        }
+    }
+
+    /// zsign 用描述文件覆盖 entitlements，只预检过期和 Team，不要求原包能力 ⊆ profile。
+    public static func validateZsignProfile(_ profile: ProfileInfo, identityName: String, now: Date = Date()) throws {
+        guard let expiration = profile.expirationDate, expiration >= now else {
+            throw SigningError.profileExpired
+        }
+        guard let expectedTeam = profile.teamID, !expectedTeam.isEmpty else {
+            throw SigningError.profileParse(L("signing.profileParse.missingTeamIdentifier"))
+        }
+        let identityTeam = identityName.range(
+            of: #"\(([A-Z0-9]{5,})\)\s*$"#,
+            options: .regularExpression
+        ).map { range in
+            String(identityName[range]).dropFirst().dropLast()
+                .trimmingCharacters(in: .whitespaces)
+        } ?? ""
+        if !identityTeam.isEmpty, identityTeam != expectedTeam {
+            throw SigningError.teamMismatch(expected: expectedTeam, actual: String(identityTeam))
+        }
     }
 
     // MARK: 错误诊断

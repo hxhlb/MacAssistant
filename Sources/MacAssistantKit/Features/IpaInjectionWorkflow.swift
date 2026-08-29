@@ -322,43 +322,46 @@ public enum IpaInjectionWorkflow {
         progress: (@Sendable (String) -> Void)? = nil
     ) throws -> IpaInjectionExecutionResult {
         var log: [String] = []
-        var emittedLogCount = 0
-        func flushLog() {
-            while emittedLogCount < log.count {
-                progress?(log[emittedLogCount])
-                emittedLogCount += 1
-            }
+        func emit(_ line: String) {
+            log.append(line)
+            progress?(line)
         }
         let work = try FileSystemHelper.makeTemporaryDirectory(prefix: "injection-plan")
-        defer { try? FileManager.default.removeItem(at: work) }
+        var didClearWork = false
+        func clearWorkCache() {
+            guard !didClearWork else { return }
+            didClearWork = true
+            try? FileManager.default.removeItem(at: work)
+            emit(InjectionProgressLog.clearedCache())
+        }
+        defer { clearWorkCache() }
 
         let app: URL
         let archiveRoot: URL?
         switch plan.input {
         case let .ipa(input):
             let extraction = work.appendingPathComponent("extract")
+            emit(InjectionProgressLog.unzipStart())
             try IpaService.unzip(input, to: extraction)
+            emit(InjectionProgressLog.unzipProgress(100))
             try IpaService.validatePayloadStructure(in: extraction)
             app = try IpaService.locateApp(in: extraction)
             archiveRoot = extraction
-            log.append(L("ipaflow.log.ipaExpanded"))
-            flushLog()
+            emit(InjectionProgressLog.unzipSucceeded())
         case let .app(input):
             try validateAppDirectory(input)
             let staged = work.appendingPathComponent(input.lastPathComponent, isDirectory: true)
             try FileManager.default.copyItem(at: input, to: staged)
             app = staged
             archiveRoot = nil
-            log.append(L("ipaflow.log.appCopyCreated"))
-            flushLog()
+            emit(InjectionProgressLog.appCopySucceeded())
         }
 
         let preflight = try preflight(plan, app: app)
         guard !preflight.hasBlockers else {
             throw IpaInjectionWorkflowError.preflight(preflight.findings)
         }
-        log.append(L("ipaflow.log.preflightPassed", preflight.targets.count))
-        flushLog()
+        emit(L("ipaflow.log.preflightPassed", preflight.targets.count))
 
         // 在任何改动之前先独立读一遍,作为 diff 的 before;after 稍后从产物再读一遍得出。
         let beforeSnapshot = try snapshotMachO(in: app)
@@ -366,66 +369,63 @@ public enum IpaInjectionWorkflow {
         let currentBundleID = ((try? IpaService.infoPlist(appBundle: app))?["CFBundleIdentifier"] as? String) ?? ""
         let metadata = plan.metadata.resolvingBundleID(current: currentBundleID)
         if metadata.randomizeBundleIDForPPQ, let rewritten = metadata.bundleID {
-            log.append(L("ipaflow.log.ppqBundleID", rewritten))
+            emit(L("ipaflow.log.ppqBundleID", rewritten))
         }
 
-        try applyComponentPolicy(plan.components, to: app, log: &log)
-        flushLog()
-        try applyResources(plan.resources, to: app, log: &log)
-        flushLog()
-        try applyMetadata(metadata, to: app, log: &log)
-        flushLog()
+        try applyComponentPolicy(plan.components, to: app, emit: emit)
+        try applyResources(plan.resources, to: app, emit: emit)
+        try applyMetadata(metadata, to: app, emit: emit)
 
         let mainExecutable = try mainExecutable(in: app)
         let resolved = try plan.items.map {
             try resolve($0, app: app, mainExecutable: mainExecutable)
         }
-        try embedDylibs(resolved, log: &log)
-        flushLog()
-        try inject(resolved, stripCodeSignature: plan.stripCodeSignatureIfNeeded, log: &log)
-        flushLog()
+        try embedAndInject(
+            resolved,
+            stripCodeSignature: plan.stripCodeSignatureIfNeeded,
+            emit: emit
+        )
 
+        var signingLog: [String] = []
         switch plan.signing {
         case .none:
-            log.append(L("ipaflow.log.signingSkipped"))
+            emit(L("ipaflow.log.signingSkipped"))
         case .adHoc:
             _ = try SigningService.resignJailbreak(
                 app: app,
                 method: .codesignAdhoc,
                 entitlements: nil,
-                log: &log
+                log: &signingLog
             )
         case .ldid:
             _ = try SigningService.resignJailbreak(
                 app: app,
                 method: .ldid,
                 entitlements: nil,
-                log: &log
+                log: &signingLog
             )
         case let .realDevice(recipe):
             try SigningService.resignRealDeviceGraph(
                 app: app,
-                identity: SigningIdentity(id: recipe.identityID, name: recipe.identityName),
-                profilesByBundleID: recipe.profilesByBundleID,
+                recipe: recipe,
                 overrideBundleID: metadata.bundleID,
-                log: &log
+                log: &signingLog
             )
         case let .appleID(recipe):
             _ = try AppleIDSigningService.applyToApp(
                 app,
                 recipe: recipe,
                 overrideBundleID: metadata.bundleID,
-                log: &log
+                log: &signingLog
             )
         }
-        flushLog()
+        signingLog.forEach(emit)
 
         let stagedAudit = try audit(plan: plan, app: app)
         guard stagedAudit.passed else {
             throw IpaInjectionWorkflowError.auditFailed(stagedAudit.unresolvedDependencies.joined(separator: "\n"))
         }
-        log.append(L("ipaflow.log.stagedAuditPassed"))
-        flushLog()
+        emit(L("ipaflow.log.stagedAuditPassed"))
 
         let output = try outputDestination(plan: plan, override: outputURL)
         guard !FileManager.default.fileExists(atPath: output.path) else {
@@ -443,20 +443,19 @@ public enum IpaInjectionWorkflow {
             guard let archiveRoot else {
                 throw IpaInjectionWorkflowError.auditFailed(L("ipaflow.audit.missingStagingRoot"))
             }
-            let temporary = output.deletingLastPathComponent()
-                .appendingPathComponent(".\(output.lastPathComponent).\(UUID().uuidString).partial")
+            // 半成品落在可写的执行工作目录，而不是最终输出旁——源快照目录是 0o555。
+            let temporary = stagingURL(for: output, in: work)
             defer { try? FileManager.default.removeItem(at: temporary) }
-            log.append(L("ipaflow.log.packaging"))
-            flushLog()
+            emit(InjectionProgressLog.zipStart())
             let topItems = try FileManager.default.contentsOfDirectory(atPath: archiveRoot.path)
             let zip = try ExternalTool.zip.run(
                 ["-qry", "-X", temporary.path] + topItems,
                 currentDirectory: archiveRoot
             )
             guard zip.succeeded else { throw IpaError.commandFailed(zip.combinedOutput) }
+            emit(InjectionProgressLog.zipProgress(100))
             _ = try ArchiveSafety.validateZIP(at: temporary)
-            log.append(L("ipaflow.log.archiveValidated"))
-            flushLog()
+            emit(L("ipaflow.log.archiveValidated"))
 
             let verifyRoot = work.appendingPathComponent("final-audit")
             try IpaService.unzip(temporary, to: verifyRoot)
@@ -469,12 +468,10 @@ public enum IpaInjectionWorkflow {
             // after 快照来自重新解包的产物,不是注入前的计划值。
             afterSnapshot = try snapshotMachO(in: verifyApp)
             try FileManager.default.moveItem(at: temporary, to: output)
+            emit(InjectionProgressLog.zipSucceeded(output.path))
         case .app:
-            let temporary = output.deletingLastPathComponent()
-                .appendingPathComponent(".\(output.lastPathComponent).\(UUID().uuidString).partial")
+            let temporary = stagingURL(for: output, in: work)
             defer { try? FileManager.default.removeItem(at: temporary) }
-            log.append(L("ipaflow.log.packaging"))
-            flushLog()
             try FileManager.default.copyItem(at: app, to: temporary)
             finalAudit = try audit(plan: plan, app: temporary)
             guard finalAudit.passed else {
@@ -482,9 +479,10 @@ public enum IpaInjectionWorkflow {
             }
             afterSnapshot = try snapshotMachO(in: temporary)
             try FileManager.default.moveItem(at: temporary, to: output)
+            emit(InjectionProgressLog.appPackaged(output.path))
         }
-        log.append(L("ipaflow.log.finalAuditPassed"))
-        flushLog()
+        emit(L("ipaflow.log.finalAuditPassed"))
+        clearWorkCache()
         return IpaInjectionExecutionResult(
             outputURL: output,
             preflight: preflight,
@@ -757,33 +755,72 @@ public enum IpaInjectionWorkflow {
         }
 
         if case let .realDevice(recipe) = plan.signing {
-            let missing = try SigningService.missingProfileBundleIDs(
-                in: app,
-                profilesByBundleID: recipe.profilesByBundleID,
-                overridingRootBundleID: plan.metadata.bundleID,
-                excludingRelativePaths: Set(componentRemovals.map(\.relativePath))
-            )
-            if !missing.isEmpty {
-                findings.append(.init(
-                    severity: .blocker,
-                    code: "signing.profile-missing",
-                    message: L("ipaflow.finding.profileMissing", missing.joined(separator: ","))
-                ))
-            }
-            for (bundleID, profileURL) in recipe.profilesByBundleID {
-                do {
-                    let profile = try SigningService.readProfile(at: profileURL)
-                    try SigningService.validateProfile(
-                        profile,
-                        identityName: recipe.identityName,
-                        bundleID: bundleID
-                    )
-                } catch {
+            if IpaZsignSigner.isIOSAppBundle(app) {
+                if !ExternalTool.zsign.isAvailable {
                     findings.append(.init(
                         severity: .blocker,
-                        code: "signing.profile-invalid",
-                        message: L("ipaflow.finding.profileInvalid", bundleID, error.localizedDescription)
+                        code: "signing.zsign-missing",
+                        message: L("ipaflow.finding.zsignMissing")
                     ))
+                }
+                let provision = IpaZsignSigner.primaryProvision(
+                    profilesByBundleID: recipe.profilesByBundleID,
+                    preferring: plan.metadata.bundleID
+                )
+                if provision == nil {
+                    findings.append(.init(
+                        severity: .blocker,
+                        code: "signing.profile-missing",
+                        message: L("ipaflow.finding.zsignProvisionMissing")
+                    ))
+                } else if let provision {
+                    do {
+                        let profile = try SigningService.readProfile(at: provision)
+                        try SigningService.validateZsignProfile(
+                            profile,
+                            identityName: recipe.identityName
+                        )
+                    } catch {
+                        findings.append(.init(
+                            severity: .blocker,
+                            code: "signing.profile-invalid",
+                            message: L(
+                                "ipaflow.finding.profileInvalid",
+                                provision.lastPathComponent,
+                                error.localizedDescription
+                            )
+                        ))
+                    }
+                }
+            } else {
+                let missing = try SigningService.missingProfileBundleIDs(
+                    in: app,
+                    profilesByBundleID: recipe.profilesByBundleID,
+                    overridingRootBundleID: plan.metadata.bundleID,
+                    excludingRelativePaths: Set(componentRemovals.map(\.relativePath))
+                )
+                if !missing.isEmpty {
+                    findings.append(.init(
+                        severity: .blocker,
+                        code: "signing.profile-missing",
+                        message: L("ipaflow.finding.profileMissing", missing.joined(separator: ","))
+                    ))
+                }
+                for (bundleID, profileURL) in recipe.profilesByBundleID {
+                    do {
+                        let profile = try SigningService.readProfile(at: profileURL)
+                        try SigningService.validateProfile(
+                            profile,
+                            identityName: recipe.identityName,
+                            bundleID: bundleID
+                        )
+                    } catch {
+                        findings.append(.init(
+                            severity: .blocker,
+                            code: "signing.profile-invalid",
+                            message: L("ipaflow.finding.profileInvalid", bundleID, error.localizedDescription)
+                        ))
+                    }
                 }
             }
         } else if plan.metadata.bundleID != nil {
@@ -824,6 +861,15 @@ public enum IpaInjectionWorkflow {
         switch item.target {
         case .mainExecutable:
             target = mainExecutable
+        case .preferredFrameworkHost:
+            target = PreferredInjectionHost.url(in: app) ?? mainExecutable
+        case let .namedFrameworkHost(name):
+            guard let choice = PreferredInjectionHost.Choice(rawValue: name),
+                  choice.frameworkName != nil,
+                  let preferred = PreferredInjectionHost.url(in: app, preferring: choice) else {
+                throw IpaInjectionWorkflowError.targetNotFound(name)
+            }
+            target = preferred
         case let .relativeMachO(path):
             target = try containedURL(path, in: app)
         }
@@ -907,72 +953,102 @@ public enum IpaInjectionWorkflow {
             .lowercased()
     }
 
-    private static func embedDylibs(_ entries: [ResolvedInjection], log: inout [String]) throws {
+    /// 按插件顺序:拷贝 → 如有可改写依赖则改写 → 注入。每步立刻回调,便于工作台逐步展示。
+    private static func embedAndInject(
+        _ entries: [ResolvedInjection],
+        stripCodeSignature: Bool,
+        emit: (String) -> Void
+    ) throws {
         var published: [String: String] = [:]
         for entry in entries {
-            let sourceHash = try DylibService.sha256(fileAt: entry.item.dylibURL)
-            if let existing = published[entry.embeddedURL.path] {
-                guard existing == sourceHash else {
-                    throw IpaInjectionWorkflowError.resourceConflict(entry.embeddedRelativePath)
-                }
-                continue
-            }
-            published[entry.embeddedURL.path] = sourceHash
-            if FileManager.default.fileExists(atPath: entry.embeddedURL.path) {
-                if try DylibService.sha256(fileAt: entry.embeddedURL) != sourceHash {
-                    guard entry.item.existingCommandPolicy == .replace else {
-                        throw IpaInjectionWorkflowError.resourceConflict(entry.embeddedRelativePath)
-                    }
-                    try FileManager.default.removeItem(at: entry.embeddedURL)
-                    try FileManager.default.copyItem(at: entry.item.dylibURL, to: entry.embeddedURL)
-                    log.append(L("ipaflow.log.dylibReplaced", entry.embeddedRelativePath))
-                }
-                continue
-            }
-            try FileManager.default.createDirectory(
-                at: entry.embeddedURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
+            let name = entry.item.dylibURL.lastPathComponent
+            try embedDylib(entry, published: &published, emit: emit)
+            try rewriteEmbeddedDependencies(of: entry, emit: emit)
+            emit(InjectionProgressLog.injectStart(name))
+            _ = try DylibInjector.inject(
+                requests: [
+                    DylibInjectionRequest(
+                        dylibPath: entry.loadPath,
+                        weak: entry.item.loadKind == .weak,
+                        existingPolicy: entry.item.existingCommandPolicy
+                    )
+                ],
+                intoFileAt: entry.targetURL,
+                stripCodeSignature: stripCodeSignature
             )
-            try FileManager.default.copyItem(at: entry.item.dylibURL, to: entry.embeddedURL)
-            log.append(L("ipaflow.log.embedded", entry.embeddedRelativePath))
+            emit(InjectionProgressLog.injectSucceeded(name))
         }
     }
 
-    private static func inject(
-        _ entries: [ResolvedInjection],
-        stripCodeSignature: Bool,
-        log: inout [String]
+    private static func embedDylib(
+        _ entry: ResolvedInjection,
+        published: inout [String: String],
+        emit: (String) -> Void
     ) throws {
-        let grouped = Dictionary(grouping: entries, by: { $0.targetURL.standardizedFileURL.path })
-        for group in grouped.values {
-            guard let target = group.first?.targetURL else { continue }
-            let requests = group.map {
-                DylibInjectionRequest(
-                    dylibPath: $0.loadPath,
-                    weak: $0.item.loadKind == .weak,
-                    existingPolicy: $0.item.existingCommandPolicy
+        let name = entry.item.dylibURL.lastPathComponent
+        let sourceHash = try DylibService.sha256(fileAt: entry.item.dylibURL)
+        if let existing = published[entry.embeddedURL.path] {
+            guard existing == sourceHash else {
+                throw IpaInjectionWorkflowError.resourceConflict(entry.embeddedRelativePath)
+            }
+            return
+        }
+        published[entry.embeddedURL.path] = sourceHash
+        if FileManager.default.fileExists(atPath: entry.embeddedURL.path) {
+            if try DylibService.sha256(fileAt: entry.embeddedURL) != sourceHash {
+                guard entry.item.existingCommandPolicy == .replace else {
+                    throw IpaInjectionWorkflowError.resourceConflict(entry.embeddedRelativePath)
+                }
+                try FileManager.default.removeItem(at: entry.embeddedURL)
+                try FileManager.default.copyItem(at: entry.item.dylibURL, to: entry.embeddedURL)
+                emit(InjectionProgressLog.copyDylibSucceeded(name))
+            }
+            return
+        }
+        try FileManager.default.createDirectory(
+            at: entry.embeddedURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.copyItem(at: entry.item.dylibURL, to: entry.embeddedURL)
+        emit(InjectionProgressLog.copyDylibSucceeded(name))
+    }
+
+    /// 仅在内置改写规划真的给出条目时记录「发现依赖 / 修改成功」。没有可改写依赖就不写。
+    private static func rewriteEmbeddedDependencies(
+        of entry: ResolvedInjection,
+        emit: (String) -> Void
+    ) throws {
+        let dependencies = try DylibService.dependencies(fileAt: entry.embeddedURL).map(\.path)
+        let changes = TweakInjectService.planRewrites(for: dependencies)
+        guard !changes.isEmpty else { return }
+        let name = entry.item.dylibURL.lastPathComponent
+        emit(InjectionProgressLog.discoveredDependencies(name))
+        for change in changes {
+            let rewrite = try DylibService.changeDependency(
+                from: change.from,
+                to: change.to,
+                fileAt: entry.embeddedURL
+            )
+            guard rewrite.succeeded else {
+                throw IpaInjectionWorkflowError.auditFailed(
+                    L("tweak.error.rewriteFailed", change.from, change.to, rewrite.combinedOutput)
                 )
             }
-            let report = try DylibInjector.inject(
-                requests: requests,
-                intoFileAt: target,
-                stripCodeSignature: stripCodeSignature
-            )
-            log.append(contentsOf: report.messages)
         }
+        emit(InjectionProgressLog.rewrittenDependencies(name))
     }
 
     private static func applyResources(
         _ resources: [InjectionResource],
         to app: URL,
-        log: inout [String]
+        emit: (String) -> Void
     ) throws {
         for resource in resources {
             let destination = try containedURL(resource.destination, in: app)
             if FileManager.default.fileExists(atPath: destination.path) {
                 if resource.replaceExisting {
                     try FileManager.default.removeItem(at: destination)
-                    log.append(L("ipaflow.log.resourceReplaced", resource.destination.rawValue))
+                    emit(L("ipaflow.log.resourceReplaced", resource.destination.rawValue))
                 } else {
                     throw IpaInjectionWorkflowError.resourceConflict(resource.destination.rawValue)
                 }
@@ -982,14 +1058,14 @@ public enum IpaInjectionWorkflow {
                 withIntermediateDirectories: true
             )
             try FileManager.default.copyItem(at: resource.sourceURL, to: destination)
-            log.append(L("ipaflow.log.resourceAdded", resource.destination.rawValue))
+            emit(L("ipaflow.log.resourceAdded", resource.destination.rawValue))
         }
     }
 
     private static func applyMetadata(
         _ changes: InjectionMetadataChanges,
         to app: URL,
-        log: inout [String]
+        emit: (String) -> Void
     ) throws {
         let plistURL = IpaService.infoPlistURL(appBundle: app)
         let data = try Data(contentsOf: plistURL)
@@ -1003,19 +1079,19 @@ public enum IpaInjectionWorkflow {
         }
         if let bundleID = changes.bundleID {
             let changed = try SigningService.rewriteBundleIDGraph(in: app, rootBundleID: bundleID)
-            log.append(L("ipaflow.log.bundleIDUpdated"))
+            emit(L("ipaflow.log.bundleIDUpdated"))
             if !changed.isEmpty {
-                log.append(L("ipaflow.log.componentBundleIDsUpdated", changed.count))
+                emit(L("ipaflow.log.componentBundleIDsUpdated", changed.count))
             }
         }
         let applied = InfoPlistMetadataApplier.apply(changes, to: &plist)
-        if applied.contains("displayName") { log.append(L("ipaflow.log.displayNameUpdated")) }
-        if applied.contains("shortVersion") { log.append(L("ipaflow.log.shortVersionUpdated")) }
-        if applied.contains("buildVersion") { log.append(L("ipaflow.log.buildVersionUpdated")) }
-        if applied.contains("minimumOSVersion") { log.append(L("ipaflow.log.minimumOSUpdated")) }
-        if applied.contains("fileSharing") { log.append(L("ipaflow.log.fileSharingEnabled")) }
-        if applied.contains("voip") { log.append(L("ipaflow.log.voipRemoved")) }
-        if applied.contains("urlSchemes") { log.append(L("ipaflow.log.urlSchemesRemoved")) }
+        if applied.contains("displayName") { emit(L("ipaflow.log.displayNameUpdated")) }
+        if applied.contains("shortVersion") { emit(L("ipaflow.log.shortVersionUpdated")) }
+        if applied.contains("buildVersion") { emit(L("ipaflow.log.buildVersionUpdated")) }
+        if applied.contains("minimumOSVersion") { emit(L("ipaflow.log.minimumOSUpdated")) }
+        if applied.contains("fileSharing") { emit(InjectionProgressLog.fileSharingEnabled()) }
+        if applied.contains("voip") { emit(L("ipaflow.log.voipRemoved")) }
+        if applied.contains("urlSchemes") { emit(L("ipaflow.log.urlSchemesRemoved")) }
         if !changes.iconFiles.isEmpty {
             var names: [String] = []
             for icon in changes.iconFiles {
@@ -1030,11 +1106,23 @@ public enum IpaInjectionWorkflow {
                 names.append(icon.lastPathComponent)
             }
             registerLooseIcons(names, in: &plist)
-            log.append(L("ipaflow.log.iconsCopied", names.count))
+            emit(L("ipaflow.log.iconsCopied", names.count))
         }
         if changes.repairWhiteIcon {
-            repairIconMetadata(&plist)
-            log.append(L("ipaflow.log.whiteIconRepaired"))
+            let removals = try AssetCatalogIconRepair.repair(in: app)
+            for removal in removals {
+                emit(
+                    InjectionProgressLog.assetsCarRemoved(
+                        appName: app.lastPathComponent,
+                        rendition: removal.renditionName
+                    )
+                )
+            }
+            let loose = AppIconRepair.pngBasenames(in: app)
+            AppIconRepair.apply(to: &plist, extraFiles: loose)
+            if removals.isEmpty {
+                emit(L("ipaflow.log.whiteIconRepaired"))
+            }
         }
         try PropertyListSerialization.data(
             fromPropertyList: plist,
@@ -1056,44 +1144,36 @@ public enum IpaInjectionWorkflow {
         }
     }
 
-    private static func repairIconMetadata(_ plist: inout [String: Any]) {
-        var names = plist["CFBundleIconFiles"] as? [String] ?? []
-        plist.removeValue(forKey: "CFBundleIconName")
-        for key in plist.keys where key == "CFBundleIcons" || key.hasPrefix("CFBundleIcons~") {
-            guard var icons = plist[key] as? [String: Any],
-                  var primary = icons["CFBundlePrimaryIcon"] as? [String: Any] else { continue }
-            names += primary["CFBundleIconFiles"] as? [String] ?? []
-            primary.removeValue(forKey: "CFBundleIconName")
-            icons["CFBundlePrimaryIcon"] = primary
-            plist[key] = icons
-        }
-        if !names.isEmpty { plist["CFBundleIconFiles"] = Array(Set(names)).sorted() }
-    }
-
     private static func applyComponentPolicy(
         _ policy: InjectionComponentPolicy,
         to app: URL,
-        log: inout [String]
+        emit: (String) -> Void
     ) throws {
-        let mappings: [(ComponentDisposition, [String])] = [
-            (policy.watch, ["Watch", "WatchPlaceholder"]),
-            (policy.plugIns, ["PlugIns"]),
-            (policy.appClips, ["AppClips"])
+        let mappings: [(ComponentDisposition, [String], String)] = [
+            (policy.watch, ["Watch", "WatchPlaceholder"], InjectionProgressLog.removedWatch()),
+            (policy.plugIns, ["PlugIns"], InjectionProgressLog.removedPlugIns()),
+            (policy.appClips, ["AppClips"], InjectionProgressLog.removedAppClips())
         ]
-        for (disposition, names) in mappings where disposition == .remove {
+        for (disposition, names, line) in mappings where disposition == .remove {
             guard policy.destructiveRemovalConfirmed else {
                 throw InjectionPlanError.validation([L("ipaflow.error.removalUnconfirmed")])
             }
+            var removed = false
             for name in names {
                 let target = app.appendingPathComponent(name)
                 if FileManager.default.fileExists(atPath: target.path) {
                     try FileManager.default.removeItem(at: target)
-                    log.append(L("ipaflow.log.componentRemoved", name))
+                    removed = true
                 }
+            }
+            if removed {
+                emit(line)
             }
         }
     }
 
+    /// 只核对计划里选中的注入目标是否带上对应 dylib。
+    /// 不扫 Frameworks / PlugIns / Watch / App Clip 里未被选中的 Mach-O。
     private static func audit(
         plan: ValidatedInjectionPlan,
         app: URL
@@ -1393,20 +1473,42 @@ public enum IpaInjectionWorkflow {
         override: URL?
     ) throws -> URL {
         if let override { return override }
-        let input = plan.input.url
+        let parent = plan.input.url.deletingLastPathComponent()
+        let directory: URL
+        if isWritableDirectory(parent) {
+            directory = parent
+        } else {
+            // 工作台的 IPA 快照目录是 0o555，不能在旁边落产物。
+            directory = try FileSystemHelper.makeTemporaryDirectory(prefix: "injection-output")
+        }
+        return outputURL(for: plan, in: directory)
+    }
+
+    private static func outputURL(for plan: ValidatedInjectionPlan, in directory: URL) -> URL {
         let isIPA: Bool
         switch plan.input {
         case .ipa: isIPA = true
         case .app: isIPA = false
         }
+        let suffix = isIPA ? "ipa" : "app"
         if let custom = plan.customOutputName {
-            let name = custom.hasSuffix(isIPA ? ".ipa" : ".app")
-                ? custom
-                : custom + (isIPA ? ".ipa" : ".app")
-            return input.deletingLastPathComponent().appendingPathComponent(name)
+            let name = custom.hasSuffix(".\(suffix)") ? custom : "\(custom).\(suffix)"
+            return directory.appendingPathComponent(name)
         }
-        let stem = input.deletingPathExtension().lastPathComponent
-        return input.deletingLastPathComponent()
-            .appendingPathComponent("\(stem).injected.\(isIPA ? "ipa" : "app")")
+        let stem = plan.input.url.deletingPathExtension().lastPathComponent
+        return directory.appendingPathComponent("\(stem).injected.\(suffix)")
+    }
+
+    /// 半成品 zip / .app 先写到执行工作目录，再 move 到最终输出。
+    private static func stagingURL(for output: URL, in work: URL) -> URL {
+        work.appendingPathComponent(".\(output.lastPathComponent).\(UUID().uuidString).partial")
+    }
+
+    private static func isWritableDirectory(_ url: URL) -> Bool {
+        guard FileSystemHelper.isDirectory(url) else { return false }
+        guard let perms = try? FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber else {
+            return FileManager.default.isWritableFile(atPath: url.path)
+        }
+        return (perms.intValue & 0o200) != 0
     }
 }

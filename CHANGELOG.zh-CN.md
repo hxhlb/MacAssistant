@@ -1,0 +1,24 @@
+# 更新日志
+
+[English](CHANGELOG.md)
+
+## [未发布]
+
+## [1.0.1] - 2026-08-29
+
+`v1.0.0-beta.4` 之后的首个正式版。ad-hoc 签名，未经苹果公证。
+
+- 注入在工作台完成。IPA、插件、证书和描述文件可一并选择。插件默认注入主程序，ProtobufLite 需单独指定。
+- 签名可选：不签名、Apple ID 或 P12。成套的 p12 与描述文件使用证书签名。密码明文显示，默认为 `1`。手机 IPA 使用 zsign，Mac 应用仍使用 `codesign`。
+- 输出为原 IPA 同目录下的 `*.injected.ipa`。
+- 可修改显示名、包名和版本，开启文件共享，移除 URL Scheme，以及删除 Watch、插件和 App Clip。
+- 微信 IPA 会单独修复深色图标。
+- 内存页与首页数据与活动监视器一致。
+- 清理页不再将无法访问的目录显示为空。
+- 已移除 App Store 下载。安装、解包、注入和重签保留。
+
+首次打开若被拦截：系统设置 → 隐私与安全性 → 仍要打开。见 [中文 README](docs/README.zh-CN.md#首次打开被拦截)。
+
+更早的测试版说明见 [英文 Changelog](CHANGELOG.md)。
+
+[1.0.1]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.1

@@ -452,7 +452,8 @@ public enum CleanupService {
         var validated: [CleanupValidatedPath] = []
         var errors: [String] = []
         var missingCount = 0
-        var permissionCount = 0
+        var rootPermissionCount = 0
+        var childPermissionHits = 0
 
         for path in definition.paths {
             if cancellation() {
@@ -466,7 +467,7 @@ public enum CleanupService {
             do {
                 let root = try policy.validate(path)
                 guard policy.isReadable(root) else {
-                    permissionCount += 1
+                    rootPermissionCount += 1
                     errors.append(L("cleanup.message.no-read-permission", path.lastPathComponent))
                     continue
                 }
@@ -474,6 +475,7 @@ public enum CleanupService {
                 let measured = measure(root: root, cancellation: cancellation)
                 total += measured.bytes
                 errors.append(contentsOf: measured.errors)
+                childPermissionHits += measured.permissionHits
                 if measured.cancelled {
                     return CleanupScanItem(
                         definition: definition,
@@ -484,7 +486,7 @@ public enum CleanupService {
             } catch CleanupPathError.missing {
                 missingCount += 1
             } catch CleanupPathError.permissionDenied {
-                permissionCount += 1
+                rootPermissionCount += 1
                 errors.append(L("cleanup.message.no-read-permission", path.lastPathComponent))
             } catch {
                 errors.append(L("cleanup.message.detail", path.lastPathComponent, error.localizedDescription))
@@ -496,7 +498,10 @@ public enum CleanupService {
         let status: CleanupScanStatus
         if missingCount == definition.paths.count {
             status = .missing
-        } else if permissionCount + missingCount == definition.paths.count && permissionCount > 0 {
+        } else if rootPermissionCount + missingCount == definition.paths.count && rootPermissionCount > 0 {
+            status = .permissionDenied(errors.first ?? L("cleanup.message.no-read-permission.generic"))
+        } else if childPermissionHits > 0 && total == 0 && rootPermissionCount == 0 {
+            // 目录本身能 stat,但子项被 TCC 挡住:绝不能显示成「空 / 0 B」。
             status = .permissionDenied(errors.first ?? L("cleanup.message.no-read-permission.generic"))
         } else if !errors.isEmpty {
             status = .partial(total, aggregate(errors))
@@ -512,16 +517,17 @@ public enum CleanupService {
     private static func measure(
         root: CleanupValidatedPath,
         cancellation: @Sendable () -> Bool
-    ) -> (bytes: Int64, errors: [String], cancelled: Bool) {
+    ) -> (bytes: Int64, errors: [String], cancelled: Bool, permissionHits: Int) {
         if !root.isDirectory {
             guard let bytes = allocatedSize(at: root.canonicalURL) else {
-                return (0, [L("cleanup.message.size-unreadable", root.canonicalURL.lastPathComponent)], false)
+                return (0, [L("cleanup.message.size-unreadable", root.canonicalURL.lastPathComponent)], false, 1)
             }
-            return (bytes, [], false)
+            return (bytes, [], false, 0)
         }
 
         var total: Int64 = 0
         var errors: [String] = []
+        var permissionHits = 0
         let keys: [URLResourceKey] = [
             .isRegularFileKey,
             .isSymbolicLinkKey,
@@ -534,16 +540,17 @@ public enum CleanupService {
             includingPropertiesForKeys: keys,
             options: [],
             errorHandler: { url, error in
+                if FileSystemHelper.isAccessPermissionError(error) { permissionHits += 1 }
                 errors.append(L("cleanup.message.detail", url.lastPathComponent, error.localizedDescription))
                 return true
             }
         ) else {
-            return (0, [L("cleanup.message.enumeration-failed")], false)
+            return (0, [L("cleanup.message.enumeration-failed")], false, 0)
         }
 
         let keySet = Set(keys)
         for case let url as URL in enumerator {
-            if cancellation() { return (total, errors, true) }
+            if cancellation() { return (total, errors, true, permissionHits) }
             guard let values = try? url.resourceValues(forKeys: keySet) else {
                 errors.append(L("cleanup.message.attributes-unreadable", url.lastPathComponent))
                 continue
@@ -561,7 +568,7 @@ public enum CleanupService {
                 )
             }
         }
-        return (total, errors, false)
+        return (total, errors, false, permissionHits)
     }
 
     /// 把可能上千条的逐文件错误压缩成前几条 + 总数，避免撑爆 UI 与内存。

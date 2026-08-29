@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 
-/// 工作台里一个可被选为「主插件」的候选。可能来自直接拖入的 dylib,也可能来自 .deb 里的候选。
+/// 工作台里的一个插件。可能来自直接拖入的 dylib,也可能来自 .deb 里的候选。默认全部注入。
 public struct WorkbenchPlugin: Identifiable, Sendable {
     public let id: UUID
     public let dylibURL: URL
@@ -50,16 +50,21 @@ public final class IpaWorkbenchController: ObservableObject {
     @Published public private(set) var frameworks: [URL] = []
     @Published public private(set) var bundles: [URL] = []
     @Published public private(set) var provisioningProfiles: [URL] = []
+    @Published public var pendingCertificateURL: URL?
+    /// 工作台 p12 明文密码。默认 `1`，用户可改。
+    @Published public var developerCertificatePassword = SigningService.defaultDeveloperCertificatePassword
     @Published public private(set) var blockedDebs: [BlockedWorkbenchDeb] = []
     @Published public private(set) var unrecognized: [URL] = []
 
-    // MARK: 主 tweak 选择(工作项 2)
-    @Published public var selectedMainPluginID: WorkbenchPlugin.ID?
+    /// 被用户关掉的插件。未列入的一律注入——工作台默认全注入。
+    @Published public var disabledPluginIDs: Set<UUID> = []
     @Published public var acknowledgedFilterMismatch = false
 
     // MARK: 目标上下文
     @Published public private(set) var targetIdentity: TweakFilterTargetIdentity?
     @Published public private(set) var requiredProfileBundleIDs: [String] = []
+    /// 当前目标包 Info.plist 里的显示名 / 包名 / 版本，供预设输入框自动填充。
+    @Published public private(set) var sourceAppMetadata: AppBundleMetadataSummary?
 
     // MARK: 签名材料(工作项 4)
     @Published public var selectedIdentity: SigningIdentity?
@@ -92,12 +97,19 @@ public final class IpaWorkbenchController: ObservableObject {
         WorkspaceInputClassifier.classify(urls)
     }
 
+    /// 工作台里已经同时有 p12 和至少一份描述文件。
+    public var hasCertificateSideloadPair: Bool {
+        pendingCertificateURL != nil && !provisioningProfiles.isEmpty
+    }
+
     /// 同步把一批 URL 按角色分桶。DEB 与目标包需要额外异步处理,返回给调用方在任务里跟进。
+    /// 同一批或与已有材料凑齐 p12 + 描述文件时，自动切到 P12 证书侧载。
     /// - Returns: 需要异步处理的目标包与 DEB。
     @discardableResult
     public func ingestSimpleInputs(_ urls: [URL]) -> (targets: [URL], debs: [URL]) {
         var pendingTargets: [URL] = []
         var pendingDebs: [URL] = []
+        var touchedCertificateMaterials = false
         for classification in classify(urls) {
             switch classification.role {
             case .ipa, .app:
@@ -112,11 +124,24 @@ public final class IpaWorkbenchController: ObservableObject {
                 if !bundles.contains(classification.url) { bundles.append(classification.url) }
             case .provisioningProfile:
                 addProvisioningProfile(classification.url)
+                touchedCertificateMaterials = true
+            case .developerCertificate:
+                pendingCertificateURL = classification.url
+                touchedCertificateMaterials = true
             case .unrecognized:
                 if !unrecognized.contains(classification.url) { unrecognized.append(classification.url) }
             }
         }
+        if touchedCertificateMaterials {
+            adoptCertificateSideloadIfPairReady()
+        }
         return (pendingTargets, pendingDebs)
+    }
+
+    /// p12 和描述文件必须配套使用；两者都在时默认走证书侧载。
+    private func adoptCertificateSideloadIfPairReady() {
+        guard hasCertificateSideloadPair else { return }
+        recipe.sideloadSigning = .p12
     }
 
     private func addDirectDylib(_ url: URL) {
@@ -130,7 +155,6 @@ public final class IpaWorkbenchController: ObservableObject {
             )
         )
         plugins.append(plugin)
-        if selectedMainPluginID == nil { selectedMainPluginID = plugin.id }
     }
 
     // MARK: - 目标包(工作项 6:不可变源快照)
@@ -150,6 +174,8 @@ public final class IpaWorkbenchController: ObservableObject {
         self.phase = .sourceSnapshot
         self.artifactState = nil
         self.audit = nil
+        sourceAppMetadata = nil
+        clearIdentityOverrides()
     }
 
     /// 从源快照读取目标身份与需覆盖的 profile bundle ID(同步版,便于测试)。
@@ -159,6 +185,7 @@ public final class IpaWorkbenchController: ObservableObject {
         let identity = try TweakFilterService.targetIdentity(forAppAt: session.appURL, components: session.components)
         let required = (try? SigningService.profileBundleIDs(in: session.appURL)) ?? []
         applyTargetContext(identity: identity, requiredBundleIDs: required)
+        applySourceMetadata(try AppBundleMetadataSummary.read(from: session.appURL))
     }
 
     /// 登记后台读到的目标上下文。仅做赋值。
@@ -168,10 +195,26 @@ public final class IpaWorkbenchController: ObservableObject {
         recomputeProfileMapping()
     }
 
+    public func applySourceMetadata(_ summary: AppBundleMetadataSummary) {
+        sourceAppMetadata = summary
+    }
+
+    public var isWeChatTarget: Bool { sourceAppMetadata?.isWeChat == true }
+
+    /// 换包时清掉上一份的包名/显示名覆盖，让新包的 Info.plist 重新填进输入框。开关类预设保留。
+    private func clearIdentityOverrides() {
+        recipe.metadata.displayName = nil
+        recipe.metadata.bundleID = nil
+        recipe.metadata.shortVersion = nil
+        recipe.metadata.buildVersion = nil
+        recipe.metadata.minimumOSVersion = nil
+        recipe.metadata.repairWhiteIcon = false
+    }
+
     // MARK: - DEB 摄取(工作项 1:适格性阻止)
 
     /// 扫描并摄取一个 .deb。设备级包(daemon / 命令行工具 / setuid / 内核级)默认阻止,
-    /// 列出原因,不静默抽 dylib。适格的包保留其候选(带 filter),供用户选主插件。
+    /// 列出原因,不静默抽 dylib。适格的包保留全部候选(带 filter),默认全部注入。
     public func ingestDeb(_ url: URL) throws {
         let session = try TweakInjectService.candidateSession(inDebAt: url)
         attachDeb(session: session, sourceName: url.lastPathComponent)
@@ -197,7 +240,35 @@ public final class IpaWorkbenchController: ObservableObject {
                 sourceDebName: sourceName
             ))
         }
-        if selectedMainPluginID == nil { selectedMainPluginID = plugins.first?.id }
+    }
+
+    public var enabledPlugins: [WorkbenchPlugin] {
+        plugins.filter { !disabledPluginIDs.contains($0.id) }
+    }
+
+    public func setPluginEnabled(_ id: UUID, _ enabled: Bool) {
+        if enabled {
+            disabledPluginIDs.remove(id)
+        } else {
+            disabledPluginIDs.insert(id)
+        }
+    }
+
+    /// 某一条插件的可选宿主。没指定就是主程序，不套全局 3 → 2 → ProtobufLite。
+    public func injectionHost(for plugin: WorkbenchPlugin) -> PreferredInjectionHost.Choice {
+        recipe.mapping(for: plugin.dylibURL.lastPathComponent)?.injectionHost ?? .automatic
+    }
+
+    public func setPluginInjectionHost(_ id: UUID, _ host: PreferredInjectionHost.Choice) {
+        guard let plugin = plugins.first(where: { $0.id == id }) else { return }
+        let name = plugin.dylibURL.lastPathComponent
+        var mappings = recipe.targetMappings
+        if let index = mappings.firstIndex(where: { $0.dylibName == name }) {
+            mappings[index].injectionHost = host
+        } else {
+            mappings.append(RecipeTargetMapping(dylibName: name, injectionHost: host))
+        }
+        recipe.targetMappings = mappings
     }
 
     // MARK: - 签名材料
@@ -211,73 +282,82 @@ public final class IpaWorkbenchController: ObservableObject {
 
     /// 按 profile 的 appID 与目标需要的 bundle ID 逐一匹配(支持通配 `*`)。
     private func recomputeProfileMapping() {
-        var mapping: [String: URL] = [:]
-        let profiles = provisioningProfiles.compactMap { url -> (URL, String)? in
-            guard let info = try? SigningService.readProfile(at: url), let appID = info.appID else { return nil }
-            return (url, appID)
-        }
-        for bundleID in requiredProfileBundleIDs {
-            if let match = profiles.first(where: { Self.appID($0.1, matches: bundleID) }) {
-                mapping[bundleID] = match.0
-            }
-        }
-        profilesByBundleID = mapping
+        profilesByBundleID = SigningService.mapProfiles(provisioningProfiles, onto: requiredProfileBundleIDs)
     }
 
     /// appID 形如 `TEAMID.com.foo.bar` 或 `TEAMID.com.foo.*`;去掉 team 前缀后与 bundleID 比对。
     nonisolated static func appID(_ appID: String, matches bundleID: String) -> Bool {
-        guard let dot = appID.firstIndex(of: ".") else { return false }
-        let allowed = String(appID[appID.index(after: dot)...])
-        if allowed.hasSuffix(".*") { return bundleID.hasPrefix(String(allowed.dropLast())) }
-        if allowed == "*" { return true }
-        return bundleID == allowed
+        SigningService.profileAppID(appID, matches: bundleID)
     }
 
     // MARK: - 派生决策(全部委托纯函数)
 
-    /// 当前签名三态。
+    /// 当前签名三态。选「不签名」时一律未签名，不因半成品 Apple ID / p12 卡住。
     public var signingDecision: WorkspaceSigningDecision {
         WorkspaceSigningPlanner.decide(
             identity: selectedIdentity,
             profilesByBundleID: profilesByBundleID,
             requiredBundleIDs: requiredProfileBundleIDs,
-            appleID: appleIDRecipe
+            appleID: appleIDRecipe,
+            extraProfiles: provisioningProfiles,
+            certificateURL: pendingCertificateURL,
+            certificatePassword: developerCertificatePassword,
+            method: recipe.sideloadSigning
         )
     }
 
-    public var selectedMainPlugin: WorkbenchPlugin? {
-        guard let selectedMainPluginID else { return nil }
-        return plugins.first { $0.id == selectedMainPluginID }
+    /// 执行层签名模式。不签名时强制 `.none`。
+    public var resolvedSigningMode: InjectionSigningMode {
+        if recipe.sideloadSigning == .none { return .none }
+        return WorkspaceSigningPlanner.signingMode(for: signingDecision, fallback: .adHoc)
     }
 
-    /// 主插件与目标 filter 的比对结论。目标身份未载入时为 nil(尚不能判定)。
-    public var mainTweakChoice: WorkbenchTweakChoice? {
-        guard let plugin = selectedMainPlugin, let identity = targetIdentity else { return nil }
-        return WorkbenchTweakEvaluator.evaluate(
-            filter: plugin.filterTargets,
-            against: identity,
-            acknowledgedMismatch: acknowledgedFilterMismatch
-        )
+    /// 每个已启用插件与目标 filter 的比对。目标身份未载入时为空(尚不能判定)。
+    public var pluginChoices: [(plugin: WorkbenchPlugin, choice: WorkbenchTweakChoice)] {
+        guard let identity = targetIdentity else { return [] }
+        return enabledPlugins.map { plugin in
+            (
+                plugin,
+                WorkbenchTweakEvaluator.evaluate(
+                    filter: plugin.filterTargets,
+                    against: identity,
+                    acknowledgedMismatch: acknowledgedFilterMismatch
+                )
+            )
+        }
     }
 
-    /// 是否被 filter 不匹配阻止(未知情确认)。
-    public var isFilterBlocked: Bool { mainTweakChoice?.isBlocked ?? false }
+    public func choice(for plugin: WorkbenchPlugin) -> WorkbenchTweakChoice? {
+        pluginChoices.first { $0.plugin.id == plugin.id }?.choice
+    }
 
-    /// 现在是否允许执行:有源快照、选了主插件、未被 filter 阻断、签名三态允许执行,
-    /// 且(若已跑过预检)预检无 blocker。
+    /// 任一已启用插件的 filter 不匹配且未知情确认时阻止。
+    public var isFilterBlocked: Bool { pluginChoices.contains { $0.choice.isBlocked } }
+
+    /// 勾了移除组件但未确认时拦住，避免点执行才抛错。
+    public var isComponentRemovalBlocked: Bool {
+        recipe.components.removesAnything && !recipe.components.destructiveRemovalConfirmed
+    }
+
+    /// 有源快照、至少启用一个插件、filter 未拦、签名三态允许、预检无 blocker。
     public var canExecute: Bool {
         snapshot != nil
-            && selectedMainPlugin != nil
+            && !enabledPlugins.isEmpty
             && !isFilterBlocked
+            && !isComponentRemovalBlocked
             && signingDecision.canExecute
             && !preflightHasBlockers
     }
 
-    /// 按注入顺序排好的 dylib:主插件在前,其余按加入顺序。
+    /// 已启用插件按加入顺序注入;若预设里写了文件名顺序则按该顺序排。
     public var orderedDylibs: [URL] {
-        guard let main = selectedMainPlugin else { return plugins.map(\.dylibURL) }
-        let rest = plugins.filter { $0.id != main.id }.map(\.dylibURL)
-        return [main.dylibURL] + rest
+        let enabled = enabledPlugins
+        guard !recipe.injectionOrder.isEmpty else { return enabled.map(\.dylibURL) }
+        return enabled.sorted { lhs, rhs in
+            let left = recipe.injectionOrder.firstIndex(of: lhs.displayName) ?? Int.max
+            let right = recipe.injectionOrder.firstIndex(of: rhs.displayName) ?? Int.max
+            return left < right
+        }.map(\.dylibURL)
     }
 
     // MARK: - 预检(工作项 2)
@@ -292,7 +372,7 @@ public final class IpaWorkbenchController: ObservableObject {
     /// 用户应在一处看到所有原因,而不是散落在各卡片或点了执行才被抛错拦住。
     public var combinedPreflightFindings: [IpaPreflightFinding] {
         var findings = preflightReport?.findings ?? []
-        if let evaluation = mainTweakChoice?.evaluation { findings += evaluation.findings }
+        for item in pluginChoices { findings += item.choice.evaluation.findings }
         for deb in blockedDebs {
             findings += deb.factors.map {
                 IpaPreflightFinding(
@@ -318,18 +398,32 @@ public final class IpaWorkbenchController: ObservableObject {
             orderedDylibs: ordered,
             frameworks: frameworks,
             recipe: recipe,
-            signing: WorkspaceSigningPlanner.signingMode(for: signingDecision)
+            signing: resolvedSigningMode
         )
         return try WorkspacePlanAssembler.makePlan(inputs)
     }
 
     /// 计划执行需要授予安全作用域访问的全部 URL(原始输入 + 各资源)。
     public var accessURLs: [URL] {
-        (snapshot.map { [$0.originalURL, $0.snapshotURL] } ?? [])
-            + plugins.map(\.dylibURL)
-            + frameworks
-            + bundles
-            + Array(profilesByBundleID.values)
+        var urls = snapshot.map { [$0.originalURL, $0.snapshotURL] } ?? []
+        if let original = snapshot?.originalURL {
+            urls.append(original.deletingLastPathComponent())
+        }
+        urls += plugins.map(\.dylibURL)
+        urls += frameworks
+        urls += bundles
+        urls += Array(profilesByBundleID.values)
+        return urls
+    }
+
+    /// 产物写在用户原始 IPA/App 旁边，绝不写进只读的 `workspace-source` 快照目录。
+    public var proposedOutputURL: URL? {
+        guard let original = snapshot?.originalURL else { return nil }
+        let isIPA = original.pathExtension.lowercased() == "ipa"
+        let stem = original.deletingPathExtension().lastPathComponent
+        let proposed = original.deletingLastPathComponent()
+            .appendingPathComponent("\(stem).injected.\(isIPA ? "ipa" : "app")")
+        return FileSystemHelper.uniqueOutputURL(basedOn: proposed)
     }
 
     // MARK: - 结果录入(工作项 3、6)
@@ -401,12 +495,15 @@ public final class IpaWorkbenchController: ObservableObject {
         frameworks = []
         bundles = []
         provisioningProfiles = []
+        pendingCertificateURL = nil
+        developerCertificatePassword = SigningService.defaultDeveloperCertificatePassword
         blockedDebs = []
         unrecognized = []
-        selectedMainPluginID = nil
+        disabledPluginIDs = []
         acknowledgedFilterMismatch = false
         targetIdentity = nil
         requiredProfileBundleIDs = []
+        sourceAppMetadata = nil
         selectedIdentity = nil
         profilesByBundleID = [:]
         appleIDRecipe = nil

@@ -93,6 +93,27 @@ final class CleanupServiceTests: XCTestCase {
         XCTAssertEqual(session.phase, .scanning)
     }
 
+    func testUnreadableChildrenArePermissionDeniedNotEmpty() throws {
+        let home = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let cache = home.appendingPathComponent("cache", isDirectory: true)
+        let locked = cache.appendingPathComponent("secret", isDirectory: true)
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: locked.path)
+        }
+
+        let target = definition(id: "cache", path: cache)
+        let policy = CleanupService.makePolicy(definitions: [target], homeDirectory: home)
+        let report = CleanupService.scan(definitions: [target], policy: policy)
+
+        guard case .permissionDenied = report.items[0].status else {
+            return XCTFail("TCC/权限挡住子项时必须标成 permissionDenied，不能是空目录或 0 B，实际: \(report.items[0].status)")
+        }
+        XCTAssertNil(report.items[0].status.measuredBytes)
+    }
+
     func testMissingAndPermissionFailuresRemainStructured() throws {
         let home = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: home) }

@@ -40,7 +40,8 @@ struct DebView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(maxWidth: 520)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityLabel("模式")
 
             switch mode {

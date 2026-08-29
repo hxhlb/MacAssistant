@@ -254,6 +254,7 @@ private enum AppBundleMachOScanner {
             ))
         }
 
+        // 默认推荐主程序。3→2→ProtobufLite 只是某一条插件的可选宿主，发现阶段不自动标成推荐。
         let rootPlist = try IpaService.infoPlist(appBundle: app)
         if let executableName = nonEmptyString(rootPlist["CFBundleExecutable"]) {
             append(
@@ -270,9 +271,18 @@ private enum AppBundleMachOScanner {
                 let plist = (try? IpaService.infoPlist(appBundle: item)) ?? [:]
                 let fallback = item.deletingPathExtension().lastPathComponent
                 let executableName = nonEmptyString(plist["CFBundleExecutable"]) ?? fallback
-                append(item.appendingPathComponent(executableName), kind: .framework, bundle: item)
-            } else if item.pathExtension.lowercased() == "dylib" {
-                append(item, kind: .dylib, bundle: nil)
+                let file = item.appendingPathComponent(executableName)
+                append(
+                    file,
+                    kind: .framework,
+                    bundle: item
+                )
+            } else if item.pathExtension.lowercased() == "dylib" || MachOIdentifier.isMachO(fileAt: item) {
+                append(
+                    item,
+                    kind: .dylib,
+                    bundle: nil
+                )
             }
         }
 

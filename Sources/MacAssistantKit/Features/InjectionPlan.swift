@@ -44,6 +44,10 @@ public enum InjectionInput: Codable, Hashable, Sendable {
 
 public enum InjectionTarget: Codable, Hashable, Sendable {
     case mainExecutable
+    /// 解包后按 3 → 2 → `ProtobufLite` 选宿主，都没有才回落主程序。
+    case preferredFrameworkHost
+    /// 用户指定的 ProtobufLite 档（`ProtobufLite3` / `ProtobufLite2` / `ProtobufLite`），找不到就失败。
+    case namedFrameworkHost(String)
     case relativeMachO(ValidatedRelativePath)
 }
 
@@ -139,9 +143,12 @@ public struct InjectionMetadataChanges: Codable, Hashable, Sendable {
     public var repairWhiteIcon: Bool
     public var removeVOIPBackgroundMode: Bool
     public var removeURLSchemes: Bool
-    /// 在 Bundle ID 后追加一段随机后缀，避开部分商店对「未改 ID 的重签包」的检查。
+    /// 兼容旧预设。工作台已不再提供此开关，多开请直接改主 Bundle ID。
     public var randomizeBundleIDForPPQ: Bool
     public var ppqBundleSuffix: String?
+
+    /// 工作台 / 向导未填写时写入的最低系统版本。
+    public static let defaultMinimumOSVersion = "14.0"
 
     public init(
         displayName: String? = nil,
@@ -150,7 +157,7 @@ public struct InjectionMetadataChanges: Codable, Hashable, Sendable {
         buildVersion: String? = nil,
         minimumOSVersion: String? = nil,
         iconFiles: [URL] = [],
-        enableFileSharing: Bool = false,
+        enableFileSharing: Bool = true,
         repairWhiteIcon: Bool = false,
         removeVOIPBackgroundMode: Bool = false,
         removeURLSchemes: Bool = false,
@@ -186,7 +193,7 @@ public struct InjectionMetadataChanges: Codable, Hashable, Sendable {
         buildVersion = try container.decodeIfPresent(String.self, forKey: .buildVersion)
         minimumOSVersion = try container.decodeIfPresent(String.self, forKey: .minimumOSVersion)
         iconFiles = try container.decodeIfPresent([URL].self, forKey: .iconFiles) ?? []
-        enableFileSharing = try container.decodeIfPresent(Bool.self, forKey: .enableFileSharing) ?? false
+        enableFileSharing = try container.decodeIfPresent(Bool.self, forKey: .enableFileSharing) ?? true
         repairWhiteIcon = try container.decodeIfPresent(Bool.self, forKey: .repairWhiteIcon) ?? false
         removeVOIPBackgroundMode = try container.decodeIfPresent(Bool.self, forKey: .removeVOIPBackgroundMode) ?? false
         removeURLSchemes = try container.decodeIfPresent(Bool.self, forKey: .removeURLSchemes) ?? false
@@ -211,6 +218,16 @@ public struct InjectionMetadataChanges: Codable, Hashable, Sendable {
             next.bundleID = base
         } else {
             next.bundleID = "\(base).\(token)"
+        }
+        return next
+    }
+
+    /// 未指定最低系统时落到 iOS 14，其它字段保持原样。
+    public func resolvingWorkbenchDefaults() -> InjectionMetadataChanges {
+        var next = self
+        let current = next.minimumOSVersion?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if current.isEmpty {
+            next.minimumOSVersion = Self.defaultMinimumOSVersion
         }
         return next
     }
@@ -266,6 +283,62 @@ public enum InfoPlistMetadataApplier {
     }
 }
 
+/// injectipa `-f/--fixIcons` 的 plist 侧：去掉 `CFBundleIconName`，改用包内已有 PNG。
+/// 真正修微信夜间主屏的是 `AssetCatalogIconRepair` 删 `Assets.car` 里那两对 rendition。
+public enum AppIconRepair {
+    public static func pngBasenames(in app: URL) -> [String] {
+        let folder = IpaService.infoPlistURL(appBundle: app).deletingLastPathComponent()
+        guard let items = try? FileManager.default.contentsOfDirectory(
+            at: folder,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        var names: Set<String> = []
+        for item in items {
+            let ext = item.pathExtension.lowercased()
+            guard ["png", "jpg", "jpeg"].contains(ext) else { continue }
+            let stem = item.deletingPathExtension().lastPathComponent
+            let lower = stem.lowercased()
+            guard lower.hasPrefix("appicon") || lower.hasPrefix("icon") else { continue }
+            names.insert(iconBasename(stem))
+        }
+        return names.sorted()
+    }
+
+    public static func apply(to plist: inout [String: Any], extraFiles: [String] = []) {
+        var names = plist["CFBundleIconFiles"] as? [String] ?? []
+        plist.removeValue(forKey: "CFBundleIconName")
+        for key in plist.keys where key == "CFBundleIcons" || key.hasPrefix("CFBundleIcons~") {
+            guard var icons = plist[key] as? [String: Any] else { continue }
+            var primary = icons["CFBundlePrimaryIcon"] as? [String: Any] ?? [:]
+            names += primary["CFBundleIconFiles"] as? [String] ?? []
+            primary.removeValue(forKey: "CFBundleIconName")
+            icons["CFBundlePrimaryIcon"] = primary
+            plist[key] = icons
+        }
+        names += extraFiles
+        let unique = Array(Set(names.filter { !$0.isEmpty })).sorted()
+        guard !unique.isEmpty else { return }
+        plist["CFBundleIconFiles"] = unique
+        for key in plist.keys where key == "CFBundleIcons" || key.hasPrefix("CFBundleIcons~") {
+            guard var icons = plist[key] as? [String: Any] else { continue }
+            var primary = icons["CFBundlePrimaryIcon"] as? [String: Any] ?? [:]
+            primary["CFBundleIconFiles"] = unique
+            primary.removeValue(forKey: "CFBundleIconName")
+            icons["CFBundlePrimaryIcon"] = primary
+            plist[key] = icons
+        }
+    }
+
+    static func iconBasename(_ file: String) -> String {
+        var name = file
+        for token in ["@3x", "@2x", "@1x"] {
+            name = name.replacingOccurrences(of: token, with: "")
+        }
+        return name
+    }
+}
+
 public enum ComponentDisposition: String, Codable, Hashable, CaseIterable, Sendable {
     case preserve
     case remove
@@ -297,13 +370,24 @@ public struct InjectionComponentPolicy: Codable, Hashable, Sendable {
 public struct RealDeviceSigningRecipe: Codable, Hashable, Sendable {
     public var identityID: String
     public var identityName: String
-    /// Key 为最终 bundle ID；主 App、appex、Watch App、AppClip 各自映射 profile。
+    /// 手机 IPA 走 zsign 时只要其中一份描述文件；电脑 .app 仍可按 bundle 映射。
     public var profilesByBundleID: [String: URL]
+    /// 工作台直接丢入的 p12。有文件时 zsign 用它，不必先导入钥匙串。
+    public var p12URL: URL?
+    public var p12Password: String?
 
-    public init(identityID: String, identityName: String, profilesByBundleID: [String: URL]) {
+    public init(
+        identityID: String,
+        identityName: String,
+        profilesByBundleID: [String: URL],
+        p12URL: URL? = nil,
+        p12Password: String? = nil
+    ) {
         self.identityID = identityID
         self.identityName = identityName
         self.profilesByBundleID = profilesByBundleID
+        self.p12URL = p12URL
+        self.p12Password = p12Password
     }
 }
 

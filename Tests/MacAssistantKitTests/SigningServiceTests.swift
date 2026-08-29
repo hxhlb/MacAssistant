@@ -225,6 +225,25 @@ final class SigningServiceTests: XCTestCase {
         )
     }
 
+    func testProfileAppIDMatchingAndMapping() {
+        XCTAssertTrue(SigningService.profileAppID("TEAM.com.demo.app", matches: "com.demo.app"))
+        XCTAssertTrue(SigningService.profileAppID("TEAM.com.demo.*", matches: "com.demo.app"))
+        XCTAssertTrue(SigningService.profileAppID("TEAM.*", matches: "anything.at.all"))
+        XCTAssertFalse(SigningService.profileAppID("TEAM.com.other", matches: "com.demo.app"))
+
+        let main = URL(fileURLWithPath: "/tmp/main.mobileprovision")
+        let share = URL(fileURLWithPath: "/tmp/share.mobileprovision")
+        let mapped = SigningService.mapProfileAppIDs(
+            [
+                (main, "TEAM.com.demo.app"),
+                (share, "TEAM.com.demo.app.share"),
+            ],
+            onto: ["com.demo.app", "com.demo.app.share"]
+        )
+        XCTAssertEqual(mapped["com.demo.app"], main)
+        XCTAssertEqual(mapped["com.demo.app.share"], share)
+    }
+
     func testCertificateExpiryStatus() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         XCTAssertEqual(CertificateExpiryStatus.of(expiration: nil, now: now), .unknown)

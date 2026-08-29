@@ -8,13 +8,11 @@ struct IpaTransferTab: View {
     private enum Mode: String, CaseIterable, Identifiable {
         case install
         case extract
-        case store
         var id: String { rawValue }
         var title: String {
             switch self {
             case .install: return L("ipatransfer.mode.install")
             case .extract: return L("ipatransfer.mode.extract")
-            case .store: return L("ipatransfer.mode.store")
             }
         }
     }
@@ -60,25 +58,14 @@ struct IpaTransferTab: View {
                 }
             }
 
-            if mode != .store {
-                deviceCard
-            }
+            deviceCard
 
             switch mode {
             case .install: installCard
             case .extract: extractCards
-            case .store:
-                IpaStoreSection { url in
-                    ipaURL = url
-                    replaceConfirmed = false
-                    installPlan = nil
-                    mode = .install
-                    log = L("ipastore.handedOff")
-                    ok = nil
-                }
             }
 
-            if mode != .store, busy || !log.isEmpty {
+            if busy || !log.isEmpty {
                 Card {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -102,7 +89,6 @@ struct IpaTransferTab: View {
         switch mode {
         case .install: return L("ipatransfer.install.intro")
         case .extract: return L("ipatransfer.extract.intro")
-        case .store: return L("ipatransfer.store.intro")
         }
     }
 

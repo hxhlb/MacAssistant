@@ -37,7 +37,7 @@ public enum EnvironmentInstallError: LocalizedError {
 }
 
 public enum EnvironmentInstaller {
-    public static let allowedFormulae: Set<String> = ["dpkg", "ldid", "zsign", "ipatool"]
+    public static let allowedFormulae: Set<String> = ["dpkg", "ldid", "zsign"]
     public static let homebrewInstructionsURL = URL(string: "https://brew.sh/")!
 
     public static func makeCommand(
@@ -100,8 +100,8 @@ public enum ExternalTool: String, CaseIterable, Sendable {
     case otool       // /usr/bin/otool       查看 Mach-O 依赖/头
     case lipo        // /usr/bin/lipo        胖二进制拆分/合并
     case installNameTool // /usr/bin/install_name_tool  修改 dylib 路径
-    case codesign    // /usr/bin/codesign    代码签名
-    case ldid        // ldid                 伪签名(Homebrew)
+    case codesign    // /usr/bin/codesign    电脑软件 / 越狱 ad-hoc
+    case ldid        // ldid                 越狱伪签名(Homebrew)
     case zip         // /usr/bin/zip
     case unzip       // /usr/bin/unzip
     case file        // /usr/bin/file        文件类型探测
@@ -115,12 +115,11 @@ public enum ExternalTool: String, CaseIterable, Sendable {
     case ditto       // /usr/bin/ditto       保留软链的干净打包
     case classDump   // class-dump           导出 ObjC 头文件(需安装)
     case dsdump      // dsdump               ObjC/Swift 符号与类型(需安装)
-    case zsign       // zsign                一步注入+重签(可选)
+    case zsign       // zsign                手机 IPA 证书签名
     case ideviceID   // idevice_id           列出 USB / 网络 iOS 设备
     case ideviceInfo // ideviceinfo          读 UDID / 名称 / 系统版本
     case ideviceInstaller // ideviceinstaller 把已签名 IPA 装到已连接设备
     case xtool       // xtool                Apple ID 开发者服务(可选)
-    case ipatool     // ipatool              自己账号下载 App Store IPA(可选)
 
     /// 命令名(用于 which 查找)。
     public var commandName: String {
@@ -169,9 +168,6 @@ public enum ExternalTool: String, CaseIterable, Sendable {
         case .xtool:
             return HostArchitecture.homebrewBinaryPaths("xtool")
                 + [NSHomeDirectory() + "/.local/bin/xtool", "/usr/local/bin/xtool"]
-        case .ipatool:
-            return HostArchitecture.homebrewBinaryPaths("ipatool")
-                + [NSHomeDirectory() + "/.local/bin/ipatool"]
         }
     }
 
@@ -199,8 +195,6 @@ public enum ExternalTool: String, CaseIterable, Sendable {
             return .openProjectPage(ProductLinks.libimobiledevice)
         case .xtool:
             return .openProjectPage(ProductLinks.xtoolProject)
-        case .ipatool:
-            return .homebrewFormula("ipatool")
         case .classDump:
             return .builtInFallback(
                 description: L("tool.classDump.builtInFallback"),

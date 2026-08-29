@@ -22,6 +22,8 @@ public enum WorkspaceInputRole: String, Codable, Hashable, Sendable {
     case bundle
     /// provisioning profile。
     case provisioningProfile
+    /// 手机 IPA 证书：p12 / pfx。
+    case developerCertificate
     /// 本机无法识别的输入,如实标注,不塞进任何角色。
     case unrecognized
 }
@@ -53,6 +55,7 @@ public enum WorkspaceInputClassifier {
         case "framework": return .framework
         case "bundle": return .bundle
         case "mobileprovision", "provisionprofile": return .provisioningProfile
+        case "p12", "pfx": return .developerCertificate
         default: return .unrecognized
         }
     }
@@ -63,6 +66,77 @@ public enum WorkspaceInputClassifier {
 
     public static func classify(_ urls: [URL]) -> [WorkspaceInputClassification] {
         urls.map(classify)
+    }
+}
+
+/// 从目标 App 的 Info.plist 读出的展示字段。工作台用来自动填充，用户改主 Bundle ID 时组件会一起改。
+public struct AppBundleMetadataSummary: Equatable, Sendable {
+    public var displayName: String
+    public var bundleID: String
+    public var shortVersion: String
+    public var minimumOSVersion: String
+    public var executable: String
+    public var isWeChat: Bool
+
+    public init(
+        displayName: String,
+        bundleID: String,
+        shortVersion: String = "",
+        minimumOSVersion: String = "",
+        executable: String = "",
+        isWeChat: Bool = false
+    ) {
+        self.displayName = displayName
+        self.bundleID = bundleID
+        self.shortVersion = shortVersion
+        self.minimumOSVersion = minimumOSVersion
+        self.executable = executable
+        self.isWeChat = isWeChat
+    }
+
+    public static func read(from app: URL) throws -> AppBundleMetadataSummary {
+        let plist = try IpaService.infoPlist(appBundle: app)
+        return from(
+            plist: plist,
+            fallbackName: app.deletingPathExtension().lastPathComponent
+        )
+    }
+
+    public static func from(plist: [String: Any], fallbackName: String) -> AppBundleMetadataSummary {
+        let bundleID = string(plist["CFBundleIdentifier"])
+        let executable = string(plist["CFBundleExecutable"])
+        let displayName = string(plist["CFBundleDisplayName"])
+            ?? string(plist["CFBundleName"])
+            ?? fallbackName
+        return AppBundleMetadataSummary(
+            displayName: displayName,
+            bundleID: bundleID ?? "",
+            shortVersion: string(plist["CFBundleShortVersionString"]) ?? "",
+            minimumOSVersion: string(plist["MinimumOSVersion"])
+                ?? string(plist["LSMinimumSystemVersion"])
+                ?? "",
+            executable: executable ?? fallbackName,
+            isWeChat: isWeChat(bundleID: bundleID ?? "", executable: executable, displayName: displayName)
+        )
+    }
+
+    /// 官方包 `com.tencent.xin`、多开变体，以及可执行文件名叫 WeChat 的砸壳包。
+    public static func isWeChat(bundleID: String, executable: String? = nil, displayName: String? = nil) -> Bool {
+        let id = bundleID.lowercased()
+        if id == "com.tencent.xin" || id.hasPrefix("com.tencent.xin.") { return true }
+        if id == "com.tencent.fchat" || id.hasPrefix("com.tencent.fchat.") { return true }
+        if let executable, executable.caseInsensitiveCompare("WeChat") == .orderedSame { return true }
+        if let displayName {
+            let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if name == "微信" || name.caseInsensitiveCompare("WeChat") == .orderedSame { return true }
+        }
+        return false
+    }
+
+    private static func string(_ value: Any?) -> String? {
+        guard let text = value as? String else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -101,10 +175,17 @@ public enum WorkbenchTweakEvaluator {
 
 // MARK: - 签名三态(工作项 4)
 
+/// 工作台侧载方式。签名可选；Apple ID 和 P12 都是侧载，没有默认项。
+public enum SideloadSigningChoice: String, Codable, CaseIterable, Sendable {
+    case none
+    case appleID
+    case p12
+}
+
 /// 拖入产物的签名分支。四态是状态机里的真实状态而非提示文案:
 /// - `.unsigned`:完全没有签名材料 → 产出「已修改 / 未签名」产物。
 /// - `.waitingForAssets`:身份或某个最终 bundle 的 profile 不完整 → 停下,不发布误标记结果。
-/// - `.readyToSign`:完整 p12 身份 + 各最终 bundle ID 的 profile 齐备 → 由内向外签名后进入交接。
+/// - `.readyToSign`:p12 身份 + 至少一份 mobileprovision → zsign 签整包后进入交接。
 /// - `.readyToSignWithAppleID`:已登录 + 已选团队/设备 + 已知最终 bundle ID → 执行时向 Apple 取 profile 再签。
 public enum WorkspaceSigningDecision: Hashable, Sendable {
     case unsigned
@@ -137,15 +218,60 @@ public enum WorkspaceSigningPlanner {
         identity: SigningIdentity?,
         profilesByBundleID: [String: URL],
         requiredBundleIDs: [String],
-        appleID: AppleIDSigningRecipe? = nil
+        appleID: AppleIDSigningRecipe? = nil,
+        extraProfiles: [URL] = [],
+        certificateURL: URL? = nil,
+        certificatePassword: String? = nil,
+        method: SideloadSigningChoice? = nil
     ) -> WorkspaceSigningDecision {
-        let p12 = decideP12(
-            identity: identity,
-            profilesByBundleID: profilesByBundleID,
-            requiredBundleIDs: requiredBundleIDs
-        )
-        if case .readyToSign = p12 { return p12 }
+        switch method {
+        case .some(.none):
+            return .unsigned
+        case .some(.p12):
+            let p12 = decideP12(
+                identity: identity,
+                profilesByBundleID: profilesByBundleID,
+                requiredBundleIDs: requiredBundleIDs,
+                extraProfiles: extraProfiles,
+                certificateURL: certificateURL,
+                certificatePassword: certificatePassword
+            )
+            if case .unsigned = p12 {
+                return .waitingForAssets(
+                    missingIdentity: identity == nil && !hasUsableP12File(
+                        certificateURL,
+                        password: certificatePassword
+                    ),
+                    missingProfileBundleIDs: requiredBundleIDs
+                )
+            }
+            return p12
+        case .some(.appleID):
+            return decideAppleID(appleID, requiredBundleIDs: requiredBundleIDs)
+        case nil:
+            let p12 = decideP12(
+                identity: identity,
+                profilesByBundleID: profilesByBundleID,
+                requiredBundleIDs: requiredBundleIDs,
+                extraProfiles: extraProfiles,
+                certificateURL: certificateURL,
+                certificatePassword: certificatePassword
+            )
+            if case .readyToSign = p12 { return p12 }
+            if let appleID, appleID.isComplete, !requiredBundleIDs.isEmpty {
+                return .readyToSignWithAppleID(appleID)
+            }
+            if let appleID, appleID.isPartial {
+                return decideAppleID(appleID, requiredBundleIDs: requiredBundleIDs)
+            }
+            return p12
+        }
+    }
 
+    private static func decideAppleID(
+        _ appleID: AppleIDSigningRecipe?,
+        requiredBundleIDs: [String]
+    ) -> WorkspaceSigningDecision {
         if let appleID, appleID.isComplete, !requiredBundleIDs.isEmpty {
             return .readyToSignWithAppleID(appleID)
         }
@@ -155,36 +281,59 @@ public enum WorkspaceSigningPlanner {
                 missingProfileBundleIDs: appleID.deviceUDID.isEmpty ? requiredBundleIDs : []
             )
         }
-        return p12
+        return .waitingForAssets(
+            missingIdentity: true,
+            missingProfileBundleIDs: requiredBundleIDs
+        )
+    }
+
+    private static func hasUsableP12File(_ url: URL?, password: String?) -> Bool {
+        guard url != nil else { return false }
+        let trimmed = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !trimmed.isEmpty
     }
 
     private static func decideP12(
         identity: SigningIdentity?,
         profilesByBundleID: [String: URL],
-        requiredBundleIDs: [String]
+        requiredBundleIDs: [String],
+        extraProfiles: [URL],
+        certificateURL: URL? = nil,
+        certificatePassword: String? = nil
     ) -> WorkspaceSigningDecision {
-        let hasAnyAsset = identity != nil || !profilesByBundleID.isEmpty
-        // 完全没有签名材料:如实产出未签名产物,交后续签名。
+        let fileCert = hasUsableP12File(certificateURL, password: certificatePassword)
+        let hasAnyAsset = identity != nil
+            || fileCert
+            || !profilesByBundleID.isEmpty
+            || !extraProfiles.isEmpty
         guard hasAnyAsset else { return .unsigned }
 
-        let missingProfiles = requiredBundleIDs
-            .filter { profilesByBundleID[$0] == nil }
-            .sorted()
-        let missingIdentity = identity == nil
+        let provision = IpaZsignSigner.primaryProvision(
+            profilesByBundleID: profilesByBundleID,
+            preferring: requiredBundleIDs.first,
+            extraProfiles: extraProfiles
+        )
+        let missingIdentity = identity == nil && !fileCert
+        let missingProfiles = provision == nil ? requiredBundleIDs : []
 
-        // 只要身份缺失、或还有最终 bundle 没匹配到 profile,就停在「等待签名材料」,不冒进签名。
-        guard let identity, missingProfiles.isEmpty, !requiredBundleIDs.isEmpty else {
+        // zsign 要一份 p12（文件+密码，或已选钥匙串身份）+ 一份描述文件。扩展不用各配一份。
+        guard (identity != nil || fileCert), let provision, !requiredBundleIDs.isEmpty else {
             return .waitingForAssets(
                 missingIdentity: missingIdentity,
                 missingProfileBundleIDs: missingProfiles
             )
         }
 
-        let active = profilesByBundleID.filter { requiredBundleIDs.contains($0.key) }
+        var active = profilesByBundleID.filter { requiredBundleIDs.contains($0.key) }
+        if active.isEmpty {
+            active[requiredBundleIDs[0]] = provision
+        }
         return .readyToSign(RealDeviceSigningRecipe(
-            identityID: identity.id,
-            identityName: identity.name,
-            profilesByBundleID: active
+            identityID: identity?.id ?? "",
+            identityName: identity?.name ?? certificateURL?.lastPathComponent ?? "",
+            profilesByBundleID: active,
+            p12URL: certificateURL,
+            p12Password: fileCert ? certificatePassword?.trimmingCharacters(in: .whitespacesAndNewlines) : nil
         ))
     }
 
@@ -363,32 +512,55 @@ public enum WorkspacePathRedactor {
 
 // MARK: - 预设 / Recipe(工作项 3)
 
-/// 本地文件访问行为。这是 **macOS 侧**工作区的引导策略,与 iOS 产物能力无关。
-public enum FileAccessBehavior: String, Codable, Hashable, Sendable, CaseIterable {
-    /// 需要访问时再提示用户授权。
-    case prompt
-    /// 运行前必须已具备访问权限,否则不继续。
-    case require
-}
-
 /// 单条 dylib 的目标映射与加载策略。以 dylib 文件名为键,便于同一 recipe 复用到不同来源。
 public struct RecipeTargetMapping: Codable, Hashable, Sendable {
     public var dylibName: String
-    /// nil 表示注入主 executable;否则为 App 内相对 Mach-O 路径。
+    /// 非空时注入这个相对 Mach-O；优先于 `injectionHost`。
     public var targetRelativePath: String?
+    /// 未指定相对路径时的可选宿主。默认主程序；`preferredFramework` / 点名档只对这一条生效。
+    public var injectionHost: PreferredInjectionHost.Choice
     public var loadKind: InjectionLoadKind
     public var existingPolicy: ExistingLoadCommandPolicy
 
     public init(
         dylibName: String,
         targetRelativePath: String? = nil,
+        injectionHost: PreferredInjectionHost.Choice = .automatic,
         loadKind: InjectionLoadKind = .required,
         existingPolicy: ExistingLoadCommandPolicy = .replace
     ) {
         self.dylibName = dylibName
         self.targetRelativePath = targetRelativePath
+        self.injectionHost = injectionHost
         self.loadKind = loadKind
         self.existingPolicy = existingPolicy
+    }
+
+    public func resolvedTarget() throws -> InjectionTarget {
+        if let relative = targetRelativePath,
+           !relative.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .relativeMachO(try ValidatedRelativePath(relative))
+        }
+        if injectionHost.usesPreferredFrameworkHost {
+            return .preferredFrameworkHost
+        }
+        if let name = injectionHost.frameworkName {
+            return .namedFrameworkHost(name)
+        }
+        return .mainExecutable
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case dylibName, targetRelativePath, injectionHost, loadKind, existingPolicy
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        dylibName = try c.decode(String.self, forKey: .dylibName)
+        targetRelativePath = try c.decodeIfPresent(String.self, forKey: .targetRelativePath)
+        injectionHost = try c.decodeIfPresent(PreferredInjectionHost.Choice.self, forKey: .injectionHost) ?? .automatic
+        loadKind = try c.decodeIfPresent(InjectionLoadKind.self, forKey: .loadKind) ?? .required
+        existingPolicy = try c.decodeIfPresent(ExistingLoadCommandPolicy.self, forKey: .existingPolicy) ?? .replace
     }
 }
 
@@ -405,7 +577,7 @@ public enum InjectionRecipeError: LocalizedError, Equatable {
     }
 }
 
-/// 可保存 / 载入的注入预设:目标映射、注入顺序、文件访问行为、组件策略、元数据处理。
+/// 可保存 / 载入的注入预设:目标映射、注入顺序、组件策略、元数据处理。
 ///
 /// recipe 只承载「设置」,不含具体文件 URL——这样一份 recipe 能复用到不同的拖入来源。
 public struct InjectionRecipe: Codable, Hashable, Sendable, Identifiable {
@@ -419,30 +591,51 @@ public struct InjectionRecipe: Codable, Hashable, Sendable, Identifiable {
     /// 按 dylib 文件名排序的注入顺序;最后一项就是「最后注入的 dylib」。
     public var injectionOrder: [String]
     public var targetMappings: [RecipeTargetMapping]
-    public var fileAccessBehavior: FileAccessBehavior
     public var components: InjectionComponentPolicy
     public var metadata: InjectionMetadataChanges
     public var stripCodeSignatureIfNeeded: Bool
+    /// 侧载方式。默认不签名；Apple ID 和 P12 都是侧载，没有默认项。
+    public var sideloadSigning: SideloadSigningChoice
+    /// 只改包、不重签。与 `sideloadSigning == .none` 同步，兼容旧 recipe / 测试。
+    public var leaveUnsigned: Bool {
+        get { sideloadSigning == .none }
+        set {
+            if newValue {
+                sideloadSigning = .none
+            } else if sideloadSigning == .none {
+                sideloadSigning = .appleID
+            }
+        }
+    }
+    /// 旧全局宿主字段，仅兼容旧 recipe JSON。装配时不再套到每个 dylib 上。
+    public var injectionHost: PreferredInjectionHost.Choice
 
     public init(
         id: UUID = UUID(),
         name: String,
         injectionOrder: [String] = [],
         targetMappings: [RecipeTargetMapping] = [],
-        fileAccessBehavior: FileAccessBehavior = .prompt,
         components: InjectionComponentPolicy = .init(),
         metadata: InjectionMetadataChanges = .init(),
-        stripCodeSignatureIfNeeded: Bool = true
+        stripCodeSignatureIfNeeded: Bool = true,
+        leaveUnsigned: Bool = true,
+        sideloadSigning: SideloadSigningChoice? = nil,
+        injectionHost: PreferredInjectionHost.Choice = .automatic
     ) {
         self.schemaVersion = Self.currentSchemaVersion
         self.id = id
         self.name = name
         self.injectionOrder = injectionOrder
         self.targetMappings = targetMappings
-        self.fileAccessBehavior = fileAccessBehavior
         self.components = components
         self.metadata = metadata
         self.stripCodeSignatureIfNeeded = stripCodeSignatureIfNeeded
+        if let sideloadSigning {
+            self.sideloadSigning = sideloadSigning
+        } else {
+            self.sideloadSigning = leaveUnsigned ? .none : .appleID
+        }
+        self.injectionHost = injectionHost
     }
 
     public func mapping(for dylibName: String) -> RecipeTargetMapping? {
@@ -454,7 +647,7 @@ public struct InjectionRecipe: Codable, Hashable, Sendable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, id, name, injectionOrder, targetMappings
-        case fileAccessBehavior, components, metadata, stripCodeSignatureIfNeeded
+        case components, metadata, stripCodeSignatureIfNeeded, leaveUnsigned, sideloadSigning, injectionHost
     }
 
     public init(from decoder: Decoder) throws {
@@ -472,10 +665,31 @@ public struct InjectionRecipe: Codable, Hashable, Sendable, Identifiable {
         name = try c.decode(String.self, forKey: .name)
         injectionOrder = try c.decodeIfPresent([String].self, forKey: .injectionOrder) ?? []
         targetMappings = try c.decodeIfPresent([RecipeTargetMapping].self, forKey: .targetMappings) ?? []
-        fileAccessBehavior = try c.decodeIfPresent(FileAccessBehavior.self, forKey: .fileAccessBehavior) ?? .prompt
         components = try c.decodeIfPresent(InjectionComponentPolicy.self, forKey: .components) ?? .init()
         metadata = try c.decodeIfPresent(InjectionMetadataChanges.self, forKey: .metadata) ?? .init()
         stripCodeSignatureIfNeeded = try c.decodeIfPresent(Bool.self, forKey: .stripCodeSignatureIfNeeded) ?? true
+        if let choice = try c.decodeIfPresent(SideloadSigningChoice.self, forKey: .sideloadSigning) {
+            sideloadSigning = choice
+        } else {
+            let unsigned = try c.decodeIfPresent(Bool.self, forKey: .leaveUnsigned) ?? false
+            sideloadSigning = unsigned ? .none : .appleID
+        }
+        injectionHost = try c.decodeIfPresent(PreferredInjectionHost.Choice.self, forKey: .injectionHost) ?? .automatic
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(schemaVersion, forKey: .schemaVersion)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(injectionOrder, forKey: .injectionOrder)
+        try c.encode(targetMappings, forKey: .targetMappings)
+        try c.encode(components, forKey: .components)
+        try c.encode(metadata, forKey: .metadata)
+        try c.encode(stripCodeSignatureIfNeeded, forKey: .stripCodeSignatureIfNeeded)
+        try c.encode(leaveUnsigned, forKey: .leaveUnsigned)
+        try c.encode(sideloadSigning, forKey: .sideloadSigning)
+        try c.encode(injectionHost, forKey: .injectionHost)
     }
 
     public func encoded() throws -> Data {
@@ -505,7 +719,7 @@ public enum WorkspacePlanAssembler {
 
     public struct Inputs: Sendable {
         public var input: InjectionInput
-        /// 已按注入顺序排好的 dylib 源文件(第一项一般是用户选定的主 tweak)。
+        /// 已按注入顺序排好的 dylib 源文件。工作台默认注入全部已启用插件。
         public var orderedDylibs: [URL]
         /// 额外 Framework 依赖,复制进 Frameworks 目录。
         public var frameworks: [URL]
@@ -533,13 +747,8 @@ public enum WorkspacePlanAssembler {
     public static func makePlan(_ inputs: Inputs) throws -> InjectionPlan {
         let items = try inputs.orderedDylibs.map { url -> InjectionItem in
             let mapping = inputs.recipe.mapping(for: url.lastPathComponent)
-            let target: InjectionTarget
-            if let relative = mapping?.targetRelativePath,
-               !relative.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                target = .relativeMachO(try ValidatedRelativePath(relative))
-            } else {
-                target = .mainExecutable
-            }
+            // 没给这一条指定宿主 → 只打主程序。全局 recipe.injectionHost 不再套到每个插件。
+            let target = try mapping?.resolvedTarget() ?? .mainExecutable
             return InjectionItem(
                 dylibURL: url,
                 target: target,
@@ -571,7 +780,7 @@ public enum WorkspacePlanAssembler {
             input: inputs.input,
             items: items,
             resources: resources,
-            metadata: inputs.recipe.metadata,
+            metadata: inputs.recipe.metadata.resolvingWorkbenchDefaults(),
             components: inputs.recipe.components,
             signing: inputs.signing,
             customOutputName: inputs.customOutputName,

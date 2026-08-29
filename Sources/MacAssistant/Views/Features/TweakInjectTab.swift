@@ -236,13 +236,11 @@ struct TweakInjectTab: View {
     }
 
     private func makeDeviceRecipe() -> RealDeviceSigningRecipe? {
-        guard let identity = selectedIdentity, !signingBundleIDs.isEmpty else { return nil }
-        let bundleIDs = signingBundleIDs
-        guard bundleIDs.allSatisfy({ profilesByBundleID[$0] != nil }) else { return nil }
+        guard let identity = selectedIdentity, !profilesByBundleID.isEmpty else { return nil }
         return RealDeviceSigningRecipe(
             identityID: identity.id,
             identityName: identity.name,
-            profilesByBundleID: profilesByBundleID.filter { bundleIDs.contains($0.key) }
+            profilesByBundleID: profilesByBundleID
         )
     }
 

@@ -10,6 +10,9 @@ struct CleanupView: View {
 
     var body: some View {
         FeatureScaffold(title: "系统清理", subtitle: "扫描用户级可再生数据；普通项目优先移入废纸篓") {
+            if model.hasPermissionDeniedItems {
+                permissionBanner
+            }
             summaryCard
             targetsCard
 
@@ -55,6 +58,27 @@ struct CleanupView: View {
     private var scanButtonTitle: String {
         if model.session.phase == .scanning { return "扫描中…" }
         return model.hasScanned ? "重新扫描" : "扫描占用"
+    }
+
+    private var permissionBanner: some View {
+        Card {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "lock.trianglebadge.exclamationmark")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("没有读取权限，不是空目录")
+                        .font(.callout.weight(.semibold))
+                    Text("macOS 挡住了部分用户目录。未授权时不会显示成 0 B 或「空」。打开「完全磁盘访问」并勾选本 App 后回来，会自动重新扫描。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("打开完全磁盘访问") {
+                        model.requestFullDiskAccess()
+                    }
+                    .buttonStyle(.borderless)
+                }
+                Spacer(minLength: 0)
+            }
+        }
     }
 
     // MARK: 概览与主操作
@@ -594,6 +618,12 @@ private final class CleanupViewModel: ObservableObject {
 
     var hasScanned: Bool { report != nil }
     var hasHistory: Bool { FileManager.default.fileExists(atPath: CleanupService.historyURL.path) }
+    var hasPermissionDeniedItems: Bool {
+        items.contains {
+            if case .permissionDenied = $0.status { return true }
+            return false
+        }
+    }
 
     func selectionBinding(for id: String) -> Binding<Bool> {
         Binding(
