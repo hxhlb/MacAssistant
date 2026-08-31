@@ -95,13 +95,21 @@ struct IpaView: View {
         }
     }
 
-    @State private var tab: Tab = .transfer
+    @Binding var tab: Tab
     @ObservedObject var injectionJob: IpaInjectionJob
+    @ObservedObject var classDumpSession: ClassDumpSession
     @ObservedObject var workspace: WorkspaceStore
 
-    @MainActor init(injectionJob: IpaInjectionJob, workspace: WorkspaceStore) {
+    @MainActor init(
+        injectionJob: IpaInjectionJob,
+        classDumpSession: ClassDumpSession,
+        workspace: WorkspaceStore,
+        tab: Binding<Tab>
+    ) {
         _injectionJob = ObservedObject(wrappedValue: injectionJob)
+        _classDumpSession = ObservedObject(wrappedValue: classDumpSession)
         _workspace = ObservedObject(wrappedValue: workspace)
+        _tab = tab
     }
 
     var body: some View {
@@ -124,7 +132,7 @@ struct IpaView: View {
                     case .transfer: IpaTransferTab()
                     case .tweak: TweakInjectionContainer(job: injectionJob, workspace: workspace)
                     case .slim: SlimTab()
-                    case .headers: ClassDumpTab()
+                    case .headers: ClassDumpTab(session: classDumpSession)
                     case .sign: SigningTab()
                     }
                 }
@@ -217,6 +225,7 @@ struct InjectDylibTab: View {
     @State private var confirmWatchRemoval = false
     @State private var confirmPlugInsRemoval = false
     @State private var confirmAppClipsRemoval = false
+    @State private var rewriteJailbreakDependencies = true
     @State private var stripSignature = true
     @State private var signMethod: SignMethod = .codesignAdhoc
     @State private var developerSigning = false
@@ -718,6 +727,10 @@ struct InjectDylibTab: View {
                     Toggle(L("ipaview.removeVOIP"), isOn: $removeVOIPBackgroundMode)
                     Toggle(L("ipaview.removeURLSchemes"), isOn: $removeURLSchemes)
                 }
+                Toggle(L("ipaview.rewriteJailbreakDeps"), isOn: $rewriteJailbreakDependencies)
+                Text(L("workbench.recipe.jailbreakDeps.note"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 componentPolicyRow(
                     title: L("ipaview.removeWatch"),
                     explanation: L("ipaview.removeWatch.detail"),
@@ -891,7 +904,8 @@ struct InjectDylibTab: View {
             ),
             signing: signing,
             customOutputName: outputName.nilIfBlank,
-            stripCodeSignatureIfNeeded: stripSignature
+            stripCodeSignatureIfNeeded: stripSignature,
+            rewriteJailbreakDependencies: rewriteJailbreakDependencies
         )
     }
 
@@ -984,6 +998,7 @@ struct InjectDylibTab: View {
         minimumOSVersion = InjectionMetadataChanges.defaultMinimumOSVersion
         outputName = ""
         enableFileSharing = true
+        rewriteJailbreakDependencies = true
         repairWhiteIcon = false
         removeVOIPBackgroundMode = false
         removeURLSchemes = false

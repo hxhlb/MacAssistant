@@ -126,6 +126,62 @@ final class InjectionProgressLogTests: XCTestCase {
         XCTAssertFalse(result.log.contains(InjectionProgressLog.discoveredDependencies("MMlibAntiDetect.dylib")))
     }
 
+    /// 大型 IPA 的打包完成后不能再依赖一次全量解包。这里在归档结构校验完成时
+    /// 占住旧实现使用的 `final-audit` 路径：若执行器仍尝试第二次展开整包，流程会失败。
+    func testExecuteIPADoesNotRequireSecondFullExtractionAfterArchiveValidation() throws {
+        for tool in [ExternalTool.clang, .zip, .unzip, .otool] where !tool.isAvailable {
+            throw XCTSkip("缺少 \(tool.commandName)")
+        }
+        let root = try FileSystemHelper.makeTemporaryDirectory(prefix: "progress-no-second-unzip")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let ipaRoot = root.appendingPathComponent("ipaRoot")
+        let app = ipaRoot.appendingPathComponent("Payload/Demo.app")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        try writePlist(to: app)
+
+        let source = root.appendingPathComponent("source.c")
+        try "int main(void) { return 0; }\n".write(to: source, atomically: true, encoding: .utf8)
+        let main = app.appendingPathComponent("Demo")
+        XCTAssertTrue(try Shell.run(
+            ExternalTool.clang.path!,
+            ["-o", main.path, source.path, "-Wl,-headerpad,0x1000"]
+        ).succeeded)
+
+        let plugin = root.appendingPathComponent("Plugin.dylib")
+        XCTAssertTrue(try Shell.run(
+            ExternalTool.clang.path!,
+            ["-dynamiclib", "-o", plugin.path, source.path, "-Wl,-headerpad,0x1000"]
+        ).succeeded)
+
+        let ipa = root.appendingPathComponent("Demo.ipa")
+        XCTAssertTrue(try ExternalTool.zip.run(
+            ["-qry", ipa.path, "Payload"],
+            currentDirectory: ipaRoot
+        ).succeeded)
+
+        let blocker = try FinalAuditExtractionBlocker()
+        let output = root.appendingPathComponent("Demo.injected.ipa")
+        let result = try IpaInjectionWorkflow.execute(
+            InjectionPlan(
+                input: .ipa(ipa),
+                items: [InjectionItem(dylibURL: plugin)],
+                metadata: InjectionMetadataChanges(enableFileSharing: false),
+                signing: .none
+            ),
+            outputURL: output,
+            progress: { line in
+                if line == L("ipaflow.log.archiveValidated") {
+                    blocker.blockFinalAuditExtraction()
+                }
+            }
+        )
+
+        XCTAssertTrue(blocker.didBlock)
+        XCTAssertTrue(result.audit.passed)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: output.path))
+    }
+
     func testExecuteLogsComponentRemovalAndRewrittenDependenciesOnlyWhenDone() throws {
         for tool in [ExternalTool.clang, .otool, .installNameTool] where !tool.isAvailable {
             throw XCTSkip("缺少 \(tool.commandName)")
@@ -187,20 +243,26 @@ final class InjectionProgressLogTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: output.appendingPathComponent("Watch").path))
         let embedded = output.appendingPathComponent("Frameworks/WCRefine.dylib")
         let deps = try DylibService.dependencies(fileAt: embedded).map(\.path)
-        XCTAssertTrue(deps.contains("@rpath/CydiaSubstrate.framework/CydiaSubstrate"))
+        XCTAssertTrue(deps.contains("@loader_path/libsubstrate.dylib"))
         XCTAssertFalse(deps.contains("/Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate"))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: output.appendingPathComponent("Frameworks/libsubstrate.dylib").path
+        ))
+        let mainLoads = try DylibInjector.loadedDylibPaths(fileAt: output.appendingPathComponent("WeChat"))
+        XCTAssertFalse(mainLoads.contains { $0.hasSuffix("libsubstrate.dylib") })
 
         assertContainsInOrder(result.log, [
             InjectionProgressLog.removedWatch(),
             InjectionProgressLog.removedPlugIns(),
             InjectionProgressLog.fileSharingEnabled(),
             InjectionProgressLog.copyDylibSucceeded("WCRefine.dylib"),
-            InjectionProgressLog.discoveredDependencies("WCRefine.dylib"),
-            InjectionProgressLog.rewrittenDependencies("WCRefine.dylib"),
             InjectionProgressLog.injectStart("WCRefine.dylib"),
             InjectionProgressLog.injectSucceeded("WCRefine.dylib"),
+            InjectionProgressLog.discoveredDependencies("WCRefine.dylib"),
+            InjectionProgressLog.rewrittenDependencies("WCRefine.dylib"),
             InjectionProgressLog.clearedCache()
         ])
+        XCTAssertTrue(result.log.contains(L("ipaflow.log.substrateStubCopied")))
         XCTAssertFalse(result.log.contains(InjectionProgressLog.removedAppClips()))
         XCTAssertFalse(result.log.contains { $0.contains("删除Assets.car") })
         XCTAssertFalse(result.log.contains(InjectionProgressLog.zipStart()))
@@ -251,5 +313,45 @@ private final class LogCollector: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return values
+    }
+}
+
+private final class FinalAuditExtractionBlocker: @unchecked Sendable {
+    private let lock = NSLock()
+    private let existingWorkDirectories: Set<String>
+    private var blocked = false
+
+    init() throws {
+        existingWorkDirectories = Set(try Self.workDirectories().map(\.path))
+    }
+
+    var didBlock: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return blocked
+    }
+
+    func blockFinalAuditExtraction() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !blocked,
+              let work = try? Self.workDirectories().first(where: {
+                  !existingWorkDirectories.contains($0.path)
+              })
+        else { return }
+
+        let finalAudit = work.appendingPathComponent("final-audit")
+        blocked = FileManager.default.createFile(
+            atPath: finalAudit.path,
+            contents: Data("second full extraction blocked by test".utf8)
+        )
+    }
+
+    private static func workDirectories() throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(
+            at: FileManager.default.temporaryDirectory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ).filter { $0.lastPathComponent.hasPrefix("injection-plan-") }
     }
 }

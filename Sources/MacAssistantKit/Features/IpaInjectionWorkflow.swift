@@ -363,7 +363,7 @@ public enum IpaInjectionWorkflow {
         }
         emit(L("ipaflow.log.preflightPassed", preflight.targets.count))
 
-        // 在任何改动之前先独立读一遍,作为 diff 的 before;after 稍后从产物再读一遍得出。
+        // 在任何改动之前先独立读一遍,作为 diff 的 before;after 稍后从修改后的暂存产物重读。
         let beforeSnapshot = try snapshotMachO(in: app)
 
         let currentBundleID = ((try? IpaService.infoPlist(appBundle: app))?["CFBundleIdentifier"] as? String) ?? ""
@@ -383,6 +383,12 @@ public enum IpaInjectionWorkflow {
         try embedAndInject(
             resolved,
             stripCodeSignature: plan.stripCodeSignatureIfNeeded,
+            emit: emit
+        )
+        try rewriteJailbreakDependenciesIfNeeded(
+            plan: plan,
+            app: app,
+            mainExecutable: mainExecutable,
             emit: emit
         )
 
@@ -449,7 +455,9 @@ public enum IpaInjectionWorkflow {
             emit(InjectionProgressLog.zipStart())
             let topItems = try FileManager.default.contentsOfDirectory(atPath: archiveRoot.path)
             let zip = try ExternalTool.zip.run(
-                ["-qry", "-X", temporary.path] + topItems,
+                // 注入产物以尽快交付/安装为主。`-1` 相比默认 deflate 明显缩短大型
+                // 二进制的重压缩时间,代价是输出包会略大。
+                ["-qry", "-1", "-X", temporary.path] + topItems,
                 currentDirectory: archiveRoot
             )
             guard zip.succeeded else { throw IpaError.commandFailed(zip.combinedOutput) }
@@ -457,16 +465,11 @@ public enum IpaInjectionWorkflow {
             _ = try ArchiveSafety.validateZIP(at: temporary)
             emit(L("ipaflow.log.archiveValidated"))
 
-            let verifyRoot = work.appendingPathComponent("final-audit")
-            try IpaService.unzip(temporary, to: verifyRoot)
-            try IpaService.validatePayloadStructure(in: verifyRoot)
-            let verifyApp = try IpaService.locateApp(in: verifyRoot)
-            finalAudit = try audit(plan: plan, app: verifyApp)
-            guard finalAudit.passed else {
-                throw IpaInjectionWorkflowError.auditFailed(finalAudit.unresolvedDependencies.joined(separator: "\n"))
-            }
-            // after 快照来自重新解包的产物,不是注入前的计划值。
-            afterSnapshot = try snapshotMachO(in: verifyApp)
+            // 暂存 App 已在压缩前逐切片审计;zip 成功后再校验中央目录和本地文件头即可。
+            // 不再把刚生成的大型 IPA 全量解压第二遍——那会让「压缩完成」之后仍产生一轮
+            // 与包体积等量的读写。after 仍从修改后的真实文件重读,不使用计划值。
+            finalAudit = stagedAudit
+            afterSnapshot = try snapshotMachO(in: app)
             try FileManager.default.moveItem(at: temporary, to: output)
             emit(InjectionProgressLog.zipSucceeded(output.path))
         case .app:
@@ -516,7 +519,11 @@ public enum IpaInjectionWorkflow {
 
         var contentHashes: [String: String] = [:]
         var installNames: [String: String] = [:]
-        let providedNames = Set(plan.items.map { $0.dylibURL.lastPathComponent.lowercased() })
+        var providedNames = Set(plan.items.map { $0.dylibURL.lastPathComponent.lowercased() })
+        if plan.rewriteJailbreakDependencies,
+           JailbreakDependencyRewriter.mode(app: app, resources: plan.resources) == .bundledStub {
+            providedNames.insert(JailbreakDependencyRewriter.stubFileName.lowercased())
+        }
         let context = dependencyContext(providedNames: providedNames, appFileNames: appFileNames)
         for entry in resolved {
             guard FileManager.default.fileExists(atPath: entry.item.dylibURL.path) else {
@@ -862,7 +869,10 @@ public enum IpaInjectionWorkflow {
         case .mainExecutable:
             target = mainExecutable
         case .preferredFrameworkHost:
-            target = PreferredInjectionHost.url(in: app) ?? mainExecutable
+            guard let preferred = PreferredInjectionHost.url(in: app) else {
+                throw IpaInjectionWorkflowError.targetNotFound("ProtobufLite3 / ProtobufLite2 / ProtobufLite")
+            }
+            target = preferred
         case let .namedFrameworkHost(name):
             guard let choice = PreferredInjectionHost.Choice(rawValue: name),
                   choice.frameworkName != nil,
@@ -963,7 +973,6 @@ public enum IpaInjectionWorkflow {
         for entry in entries {
             let name = entry.item.dylibURL.lastPathComponent
             try embedDylib(entry, published: &published, emit: emit)
-            try rewriteEmbeddedDependencies(of: entry, emit: emit)
             emit(InjectionProgressLog.injectStart(name))
             _ = try DylibInjector.inject(
                 requests: [
@@ -1013,21 +1022,76 @@ public enum IpaInjectionWorkflow {
         emit(InjectionProgressLog.copyDylibSucceeded(name))
     }
 
-    /// 仅在内置改写规划真的给出条目时记录「发现依赖 / 修改成功」。没有可改写依赖就不写。
-    private static func rewriteEmbeddedDependencies(
-        of entry: ResolvedInjection,
+    /// 整包扫描：改 Substrate / 其它越狱绝对路径。内置 stub 只拷进 Frameworks，不 LC_LOAD。
+    private static func rewriteJailbreakDependenciesIfNeeded(
+        plan: ValidatedInjectionPlan,
+        app: URL,
+        mainExecutable: URL,
         emit: (String) -> Void
     ) throws {
-        let dependencies = try DylibService.dependencies(fileAt: entry.embeddedURL).map(\.path)
-        let changes = TweakInjectService.planRewrites(for: dependencies)
+        guard plan.rewriteJailbreakDependencies else { return }
+        let mode = JailbreakDependencyRewriter.mode(app: app, resources: plan.resources)
+        let files = FileSystemHelper.allFiles(in: app) { MachOIdentifier.isMachO(fileAt: $0) }
+        let needsStub = mode == .bundledStub && files.contains { file in
+            guard !JailbreakDependencyRewriter.isSubstrateRuntimeFile(file) else { return false }
+            let paths = (try? DylibService.loadDependencyPaths(fileAt: file)) ?? []
+            return paths.contains(where: JailbreakDependencyRewriter.isCydiaSubstrate)
+        }
+        if needsStub {
+            try embedBundledSubstrateStub(in: app, emit: emit)
+        }
+        for file in files {
+            guard !JailbreakDependencyRewriter.isSubstrateRuntimeFile(file) else { continue }
+            try rewriteJailbreakDependencies(
+                of: file,
+                app: app,
+                mainExecutable: mainExecutable,
+                mode: mode,
+                emit: emit
+            )
+        }
+    }
+
+    private static func embedBundledSubstrateStub(in app: URL, emit: (String) -> Void) throws {
+        guard let source = JailbreakDependencyRewriter.bundledStubURL() else {
+            throw IpaInjectionWorkflowError.auditFailed(L("ipaflow.error.missingSubstrateStub"))
+        }
+        let destination = frameworksDirectory(in: app)
+            .appendingPathComponent(JailbreakDependencyRewriter.stubFileName)
+        if FileManager.default.fileExists(atPath: destination.path) { return }
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.copyItem(at: source, to: destination)
+        emit(L("ipaflow.log.substrateStubCopied"))
+        emit(L("ipaflow.log.substrateStubWarning"))
+    }
+
+    private static func rewriteJailbreakDependencies(
+        of file: URL,
+        app: URL,
+        mainExecutable: URL,
+        mode: JailbreakDependencyRewriter.SubstrateMode,
+        emit: (String) -> Void
+    ) throws {
+        let analysis = try DylibService.analyze(fileAt: file)
+        let changes = JailbreakDependencyRewriter.planRewrites(
+            for: analysis.dependencies.map(\.path),
+            binary: file,
+            app: app,
+            mainExecutable: mainExecutable,
+            mode: mode,
+            installName: analysis.installName
+        )
         guard !changes.isEmpty else { return }
-        let name = entry.item.dylibURL.lastPathComponent
+        let name = file.lastPathComponent
         emit(InjectionProgressLog.discoveredDependencies(name))
         for change in changes {
             let rewrite = try DylibService.changeDependency(
                 from: change.from,
                 to: change.to,
-                fileAt: entry.embeddedURL
+                fileAt: file
             )
             guard rewrite.succeeded else {
                 throw IpaInjectionWorkflowError.auditFailed(
@@ -1035,7 +1099,23 @@ public enum IpaInjectionWorkflow {
                 )
             }
         }
+        if changes.contains(where: { $0.to.hasPrefix("@rpath/") }) {
+            let rpath = JailbreakDependencyRewriter.rpathNeededToResolveNativeFramework(
+                for: file,
+                app: app,
+                mainExecutable: mainExecutable
+            )
+            _ = try DylibService.ensureRPath(rpath, fileAt: file)
+        }
         emit(InjectionProgressLog.rewrittenDependencies(name))
+    }
+
+    private static func frameworksDirectory(in app: URL) -> URL {
+        let macOSContents = app.appendingPathComponent("Contents", isDirectory: true)
+        let root = FileSystemHelper.isDirectory(app.appendingPathComponent("Contents/MacOS", isDirectory: true))
+            ? macOSContents
+            : app
+        return root.appendingPathComponent("Frameworks", isDirectory: true)
     }
 
     private static func applyResources(

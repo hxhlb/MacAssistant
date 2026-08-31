@@ -664,17 +664,20 @@ public enum ClassDumpService {
         return facts
     }
 
-    /// 定位待分析的主可执行文件;返回二进制 URL 与需清理的临时目录(若有)。
+    /// 定位待分析的 App 主进程 Mach-O；返回二进制 URL 与需清理的临时目录(若有)。
+    ///
+    /// 现代 App 常把启动器做得很小，把主业务放在 Frameworks 中。Class Dump 默认选择
+    /// 主可执行文件与 Frameworks 中体积最大的有效 Mach-O，避免只导出启动壳。
     public static func resolveBinary(from url: URL) throws -> (binary: URL, cleanup: URL?) {
         let ext = url.pathExtension.lowercased()
         if ext == "ipa" {
             let work = try FileSystemHelper.makeTemporaryDirectory(prefix: "cd-ipa")
             try IpaService.unzip(url, to: work.appendingPathComponent("x"))
             let app = try IpaService.locateApp(in: work.appendingPathComponent("x"))
-            return (try mainExecutable(ofApp: app), work)
+            return (try preferredProcessBinary(ofApp: app), work)
         }
         if ext == "app" || (FileSystemHelper.isDirectory(url) && ext == "app") {
-            return (try mainExecutable(ofApp: url), nil)
+            return (try preferredProcessBinary(ofApp: url), nil)
         }
         if FileSystemHelper.isDirectory(url) {
             // .framework 或其它目录:取里面第一个 Mach-O
@@ -693,6 +696,28 @@ public enum ClassDumpService {
         let url = app.appendingPathComponent(exec)
         guard MachOIdentifier.isMachO(fileAt: url) else { throw ClassDumpError.notMachO }
         return url
+    }
+
+    static func preferredProcessBinary(ofApp app: URL) throws -> URL {
+        let main = try mainExecutable(ofApp: app)
+        let frameworks = app.appendingPathComponent("Frameworks", isDirectory: true)
+        let frameworkMachOs = FileSystemHelper.allFiles(in: frameworks) {
+            MachOIdentifier.isMachO(fileAt: $0)
+        }
+        return ([main] + frameworkMachOs).max { left, right in
+            let leftSize = logicalFileSize(at: left)
+            let rightSize = logicalFileSize(at: right)
+            if leftSize == rightSize {
+                // 相同大小时优先保留主可执行文件，使选择稳定。
+                return right.standardizedFileURL == main.standardizedFileURL
+            }
+            return leftSize < rightSize
+        } ?? main
+    }
+
+    private static func logicalFileSize(at url: URL) -> Int64 {
+        let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+        return Int64(size ?? 0)
     }
 
     /// 主入口:自动选择原生 / 外部工具。
@@ -788,7 +813,10 @@ public enum ClassDumpService {
             skippedCount: parsedObjC.skippedCount,
             skipReasons: parsedObjC.skipReasons
         )
-        let header = L("classdump.header.generatedBy") + "\n"
+        let header = L(
+            "classdump.header.generatedBy",
+            ProductLinks.Repository.homepage.absoluteString
+        ) + "\n"
             + L(
                 "classdump.header.fileSummary",
                 url.lastPathComponent,

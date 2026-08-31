@@ -1,6 +1,6 @@
 import Foundation
 
-/// 一条 install_name 改写(把越狱绝对路径改成 @rpath)。
+/// 一条越狱依赖改写（绝对路径改到包内可解析路径）。
 public struct InstallNameChange: Sendable, Hashable {
     public let from: String
     public let to: String
@@ -15,10 +15,12 @@ public struct TweakInjectOptions: Sendable {
     public var stripCodeSignature: Bool
     public var signMethod: SignMethod
     public var deviceSigning: RealDeviceSigningRecipe?
+    public var rewriteJailbreakDependencies: Bool
 
     public init(tweaks: [URL], elleKitFramework: URL? = nil, frameworks: [URL] = [], weak: Bool = false,
                 stripCodeSignature: Bool = true, signMethod: SignMethod = .codesignAdhoc,
-                deviceSigning: RealDeviceSigningRecipe? = nil) {
+                deviceSigning: RealDeviceSigningRecipe? = nil,
+                rewriteJailbreakDependencies: Bool = true) {
         self.tweaks = tweaks
         self.elleKitFramework = elleKitFramework
         self.frameworks = frameworks
@@ -26,6 +28,7 @@ public struct TweakInjectOptions: Sendable {
         self.stripCodeSignature = stripCodeSignature
         self.signMethod = signMethod
         self.deviceSigning = deviceSigning
+        self.rewriteJailbreakDependencies = rewriteJailbreakDependencies
     }
 }
 
@@ -145,62 +148,48 @@ public enum TweakInjectError: LocalizedError {
     }
 }
 
-/// 插件 / tweak 注入:DEB → 提取 tweak → @rpath 改写 → 原生注入 → 补 rpath → 重签 → 重打包。
+/// 插件 / tweak 注入:DEB → 提取 tweak → 自动修改越狱依赖 → 原生注入 → 补 rpath → 重签 → 重打包。
 public enum TweakInjectService {
 
-    /// 已知需重定向到 ElleKit 的依赖关键字,复用全项目唯一的关键字表。
-    private static var tweakLibKeywords: [String] { DependencyClassifier.jailbreakRuntimeKeywords }
+    // MARK: 纯逻辑:越狱依赖改写规划
 
-    // MARK: 纯逻辑:@rpath 改写规划
-
-    /// 依据依赖列表生成 install_name 改写计划(把越狱绝对路径统一改成 @rpath)。
+    /// 依据依赖列表生成改写计划。无二进制位置时按主程序 + 内置 stub 估算。
     public static func planRewrites(for dependencies: [String]) -> [InstallNameChange] {
-        var seen = Set<String>()
-        var result: [InstallNameChange] = []
-        for dep in dependencies {
-            guard let to = rewriteTarget(for: dep), to != dep, !seen.contains(dep) else { continue }
-            seen.insert(dep)
-            result.append(InstallNameChange(from: dep, to: to))
-        }
-        return result
+        let app = URL(fileURLWithPath: "/App.app")
+        let main = app.appendingPathComponent("App")
+        return JailbreakDependencyRewriter.planRewrites(
+            for: dependencies,
+            binary: main,
+            app: app,
+            mainExecutable: main,
+            mode: .bundledStub
+        )
     }
 
-    /// 计算单条依赖的 @rpath 目标;返回 nil 表示无需改写(系统库 / 已是 @rpath)。
+    /// 计算单条依赖的目标;返回 nil 表示无需改写。
     static func rewriteTarget(for dependency: String) -> String? {
-        if dependency.hasPrefix("@") { return nil }
-        // 去掉 rootless 前缀 /var/jb
-        var path = dependency
-        if path.hasPrefix("/var/jb") { path = String(path.dropFirst("/var/jb".count)) }
-
-        // CydiaSubstrate → ElleKit 替身
-        if path.contains("CydiaSubstrate.framework") {
-            return "@rpath/CydiaSubstrate.framework/CydiaSubstrate"
-        }
-        // /Library/Frameworks/X.framework/... → @rpath/X.framework/...
-        if let r = path.range(of: "/Library/Frameworks/") {
-            return "@rpath/" + String(path[r.upperBound...])
-        }
-        // MobileSubstrate 动态库
-        if path.contains("/Library/MobileSubstrate/DynamicLibraries/") {
-            return "@rpath/" + (path as NSString).lastPathComponent
-        }
-        // 其它 /Library/*.dylib
-        if path.hasPrefix("/Library/"), path.hasSuffix(".dylib") {
-            return "@rpath/" + (path as NSString).lastPathComponent
-        }
-        // /usr/lib 下:仅改写已知 tweak 相关库,系统库不动
-        if path.hasPrefix("/usr/lib/"), path.hasSuffix(".dylib") {
-            let base = (path as NSString).lastPathComponent.lowercased()
-            if tweakLibKeywords.contains(where: { base.contains($0) }) {
-                return "@rpath/" + (path as NSString).lastPathComponent
-            }
-        }
-        return nil
+        let app = URL(fileURLWithPath: "/App.app")
+        let main = app.appendingPathComponent("App")
+        return JailbreakDependencyRewriter.substrateTarget(
+            for: dependency,
+            binary: main,
+            app: app,
+            mainExecutable: main,
+            mode: .bundledStub
+        ) ?? JailbreakDependencyRewriter.genericRewriteTarget(for: dependency)
     }
 
-    /// 改写计划里是否需要提供 CydiaSubstrate.framework(ElleKit)。
+    /// 改写计划里是否需要提供 CydiaSubstrate.framework。
     public static func requiresSubstrateFramework(_ changes: [InstallNameChange]) -> Bool {
         changes.contains { $0.to.contains("CydiaSubstrate.framework") }
+    }
+
+    /// 改写计划是否触及 Substrate 运行库（含改到 libsubstrate stub）。
+    public static func requiresSubstrateRuntime(_ changes: [InstallNameChange]) -> Bool {
+        changes.contains {
+            JailbreakDependencyRewriter.isCydiaSubstrate($0.from)
+                || JailbreakDependencyRewriter.isCydiaSubstrate($0.to)
+        }
     }
 
     // MARK: 从 .deb 提取 tweak
@@ -362,26 +351,26 @@ public enum TweakInjectService {
             )
             try FileManager.default.copyItem(at: dylib, to: destination)
 
-            let deps = try DylibService.dependencies(fileAt: destination).map(\.path)
-            let changes = planRewrites(for: deps)
-            for change in changes {
-                let rewrite = try DylibService.changeDependency(
-                    from: change.from,
-                    to: change.to,
-                    fileAt: destination
-                )
-                guard rewrite.succeeded else {
-                    throw TweakInjectError.commandFailed(
-                        L("tweak.error.rewriteFailed", change.from, change.to, rewrite.combinedOutput)
-                    )
-                }
+            if options.rewriteJailbreakDependencies {
+                let analysis = try DylibService.analyze(fileAt: destination)
+                let deps = analysis.dependencies.map(\.path)
+                let dummyApp = URL(fileURLWithPath: "/App.app")
+                let dummyMain = dummyApp.appendingPathComponent("App")
+                let binary = dummyApp
+                    .appendingPathComponent("Frameworks", isDirectory: true)
+                    .appendingPathComponent(destination.lastPathComponent)
+                let mode: JailbreakDependencyRewriter.SubstrateMode =
+                    options.elleKitFramework == nil ? .bundledStub : .nativeFramework
+                allRewrites.append(contentsOf: JailbreakDependencyRewriter.planRewrites(
+                    for: deps,
+                    binary: binary,
+                    app: dummyApp,
+                    mainExecutable: dummyMain,
+                    mode: mode,
+                    installName: analysis.installName
+                ))
             }
-            allRewrites.append(contentsOf: changes)
             return destination
-        }
-
-        if requiresSubstrateFramework(allRewrites), options.elleKitFramework == nil {
-            throw TweakInjectError.unresolvedDependency(L("tweak.error.missingSubstrateFramework", "tweak"))
         }
 
         let signing: InjectionSigningMode
@@ -418,7 +407,8 @@ public enum TweakInjectService {
             },
             resources: resources,
             signing: signing,
-            stripCodeSignatureIfNeeded: options.stripCodeSignature
+            stripCodeSignatureIfNeeded: options.stripCodeSignature,
+            rewriteJailbreakDependencies: options.rewriteJailbreakDependencies
         )
         let proposed = input.url.deletingPathExtension()
             .appendingPathExtension("injected")

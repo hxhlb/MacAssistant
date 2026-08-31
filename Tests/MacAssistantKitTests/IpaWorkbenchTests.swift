@@ -497,6 +497,7 @@ final class IpaWorkbenchTests: XCTestCase {
         )
         // 缺字段的旧预设保持原先会签名的行为；新工作台 init 才默认勾选仅修改。
         XCTAssertFalse(try InjectionRecipe.decode(missing).leaveUnsigned)
+        XCTAssertTrue(try InjectionRecipe.decode(missing).rewriteJailbreakDependencies)
         // 旧预设里的 macOS 文件访问字段直接忽略，不再影响执行。
         let legacyAccess = Data(#"{"name":"x","fileAccessBehavior":"require"}"#.utf8)
         XCTAssertEqual(try InjectionRecipe.decode(legacyAccess).name, "x")

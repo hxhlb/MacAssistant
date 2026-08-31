@@ -18,6 +18,7 @@ final class AppRouteTests: XCTestCase {
             (.binary, .binary),
             (.environment, .environment),
             (.about, .about),
+            (.opensource, .opensource),
         ]
 
         XCTAssertEqual(SidebarItem.allCases.count, expected.count)

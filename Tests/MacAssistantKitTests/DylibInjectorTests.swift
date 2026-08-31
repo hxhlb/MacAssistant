@@ -143,6 +143,27 @@ final class DylibInjectorTests: XCTestCase {
                       "注入的 dylib 未被加载。stdout=\(after.stdout) stderr=\(after.stderr)")
     }
 
+    func testChangeLoadCommandGrowsPathByRemoveAndInsert() throws {
+        var bytes = syntheticThin64(cpuType: 0x0100_000c)
+        var report = InjectionReport()
+        try DylibInjector.injectAll(
+            &bytes,
+            dylibPath: "/usr/lib/libsubstrate.dylib",
+            weak: false,
+            stripCodeSignature: false,
+            report: &report
+        )
+        try DylibInjector.changeLoadCommand(
+            from: "/usr/lib/libsubstrate.dylib",
+            to: "@rpath/CydiaSubstrate.framework/CydiaSubstrate",
+            bytes: &bytes,
+            stripCodeSignature: false
+        )
+        let paths = try DylibInjector.loadedDylibPathsBySlice(bytes)
+        XCTAssertTrue(paths[0].contains("@rpath/CydiaSubstrate.framework/CydiaSubstrate"))
+        XCTAssertFalse(paths[0].contains("/usr/lib/libsubstrate.dylib"))
+    }
+
     func testRejectsNonMachO() throws {
         let dir = try FileSystemHelper.makeTemporaryDirectory(prefix: "InjectReject")
         defer { try? FileManager.default.removeItem(at: dir) }

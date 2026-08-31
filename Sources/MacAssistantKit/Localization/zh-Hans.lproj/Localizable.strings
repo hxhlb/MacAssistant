@@ -450,7 +450,7 @@
 "classdump.warning.externalNoCoverageStats" = "外部结果不统计方法、属性和协议覆盖率";
 "classdump.warning.fellBackToExternal" = "已回退外部工具:%@";
 "classdump.warning.cannotSplitExternalResult" = "外部增强结果无法可靠拆分，已改为聚合头文件。";
-"classdump.header.generatedBy" = "// 由 Mac 小助手原生 ObjC 解析器生成(尽力而为,未加密 + 传统指针格式)";
+"classdump.header.generatedBy" = "// 由 Mac 小助手基于 classdump 生成\n// 开源地址：%@";
 "classdump.header.fileSummary" = "// 文件:%@  架构:%@  类数:%d";
 
 /* DebService */
@@ -570,6 +570,10 @@
 "dylib.macho.unsupported.partialSlices" = "仅部分切片包含 %@，不能安全跳过";
 "dylib.macho.unsupported.fatSliceOverflow" = "fat 切片偏移或长度溢出";
 "dylib.macho.unsupported.fatSliceOverlap" = "fat 切片范围重叠";
+"dylib.macho.unsupported.changeMissing" = "找不到要改写的 load command：%@";
+"ipaflow.log.substrateStubCopied" = "已将内置 libsubstrate stub 放入 Frameworks（不注入主程序）";
+"ipaflow.log.substrateStubWarning" = "内置 stub 依赖 libstdc++，iOS 17+ 请优先使用包内或 ElleKit 的 CydiaSubstrate.framework";
+"ipaflow.error.missingSubstrateStub" = "需要内置 libsubstrate.dylib，但资源缺失";
 "dylib.macho.log.skippedExisting" = "已跳过现有 load command：%@";
 "dylib.macho.log.replacedWithWeak" = "已把切片 %d 的现有命令替换为弱引用：%@";
 "dylib.macho.log.replacedWithStrong" = "已把切片 %d 的现有命令替换为强引用：%@";
@@ -650,13 +654,14 @@
 "sidebar.network" = "网络工具";
 "sidebar.cheatsheet" = "命令速查";
 "sidebar.recipes" = "快捷开关";
-"sidebar.deb" = "DEB 工具";
-"sidebar.dylib" = "DYLIB 工具";
-"sidebar.ipa" = "IPA 工具箱";
-"sidebar.macApp" = "macOS App 注入";
-"sidebar.binary" = "二进制工具";
+"sidebar.deb" = "软件打包";
+"sidebar.dylib" = "动态链接";
+"sidebar.ipa" = "应用封装";
+"sidebar.macApp" = "注入工具";
+"sidebar.binary" = "逆向分析";
 "sidebar.environment" = "环境检查";
-"sidebar.about" = "关于 / 开源";
+"sidebar.about" = "关于软件";
+"sidebar.opensource" = "开源许可";
 
 /* Risk levels */
 "risk.safe" = "安全";

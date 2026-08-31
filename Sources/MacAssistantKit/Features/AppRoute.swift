@@ -1,20 +1,12 @@
 public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable {
     case dashboard, repair, cleanup, memory, network, cheatsheet, recipes
     case deb, dylib, ipa, macApp, binary
-    case environment, about
+    case environment, about, opensource
 
     public var id: String { rawValue }
 
     public var title: String {
         L("sidebar.\(rawValue)")
-    }
-
-    /// 逆向类工具仍处于 Beta 阶段,侧栏用小标签标注(不写进标题)。
-    public var isBeta: Bool {
-        switch self {
-        case .deb, .dylib, .ipa, .macApp, .binary: return true
-        default: return false
-        }
     }
 
     public var icon: String {
@@ -33,6 +25,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
         case .binary: return "cpu"
         case .environment: return "checklist"
         case .about: return "info.circle"
+        case .opensource: return "scalemass"
         }
     }
 
@@ -52,6 +45,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
         case .binary: return .binary
         case .environment: return .environment
         case .about: return .about
+        case .opensource: return .opensource
         }
     }
 }
@@ -59,7 +53,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
 public enum AppDestination: String, CaseIterable, Hashable, Sendable {
     case dashboard, repair, cleanup, memory, network, cheatsheet, recipes
     case deb, dylib, ipa, macApp, binary
-    case environment, about
+    case environment, about, opensource
 
     public var sidebarItem: SidebarItem {
         switch self {
@@ -77,6 +71,7 @@ public enum AppDestination: String, CaseIterable, Hashable, Sendable {
         case .binary: return .binary
         case .environment: return .environment
         case .about: return .about
+        case .opensource: return .opensource
         }
     }
 }

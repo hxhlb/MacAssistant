@@ -408,6 +408,8 @@ public struct InjectionPlan: Codable, Hashable, Sendable {
     public var signing: InjectionSigningMode
     public var customOutputName: String?
     public var stripCodeSignatureIfNeeded: Bool
+    /// 开启后扫描整包，把越狱 Substrate 路径改到包内运行库，必要时拷内置 stub。
+    public var rewriteJailbreakDependencies: Bool
 
     public init(
         input: InjectionInput,
@@ -417,7 +419,8 @@ public struct InjectionPlan: Codable, Hashable, Sendable {
         components: InjectionComponentPolicy = .init(),
         signing: InjectionSigningMode = .adHoc,
         customOutputName: String? = nil,
-        stripCodeSignatureIfNeeded: Bool = true
+        stripCodeSignatureIfNeeded: Bool = true,
+        rewriteJailbreakDependencies: Bool = true
     ) {
         self.input = input
         self.items = items
@@ -427,6 +430,7 @@ public struct InjectionPlan: Codable, Hashable, Sendable {
         self.signing = signing
         self.customOutputName = customOutputName
         self.stripCodeSignatureIfNeeded = stripCodeSignatureIfNeeded
+        self.rewriteJailbreakDependencies = rewriteJailbreakDependencies
     }
 
     public func validated() throws -> ValidatedInjectionPlan {
@@ -486,6 +490,37 @@ public struct InjectionPlan: Codable, Hashable, Sendable {
         if !messages.isEmpty { throw InjectionPlanError.validation(messages) }
         return ValidatedInjectionPlan(plan: self)
     }
+
+    enum CodingKeys: String, CodingKey {
+        case input, items, resources, metadata, components, signing
+        case customOutputName, stripCodeSignatureIfNeeded, rewriteJailbreakDependencies
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        input = try container.decode(InjectionInput.self, forKey: .input)
+        items = try container.decode([InjectionItem].self, forKey: .items)
+        resources = try container.decodeIfPresent([InjectionResource].self, forKey: .resources) ?? []
+        metadata = try container.decodeIfPresent(InjectionMetadataChanges.self, forKey: .metadata) ?? .init()
+        components = try container.decodeIfPresent(InjectionComponentPolicy.self, forKey: .components) ?? .init()
+        signing = try container.decodeIfPresent(InjectionSigningMode.self, forKey: .signing) ?? .adHoc
+        customOutputName = try container.decodeIfPresent(String.self, forKey: .customOutputName)
+        stripCodeSignatureIfNeeded = try container.decodeIfPresent(Bool.self, forKey: .stripCodeSignatureIfNeeded) ?? true
+        rewriteJailbreakDependencies = try container.decodeIfPresent(Bool.self, forKey: .rewriteJailbreakDependencies) ?? true
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(input, forKey: .input)
+        try container.encode(items, forKey: .items)
+        try container.encode(resources, forKey: .resources)
+        try container.encode(metadata, forKey: .metadata)
+        try container.encode(components, forKey: .components)
+        try container.encode(signing, forKey: .signing)
+        try container.encodeIfPresent(customOutputName, forKey: .customOutputName)
+        try container.encode(stripCodeSignatureIfNeeded, forKey: .stripCodeSignatureIfNeeded)
+        try container.encode(rewriteJailbreakDependencies, forKey: .rewriteJailbreakDependencies)
+    }
 }
 
 /// 只有经过 `InjectionPlan.validated()` 才能构造，执行层仅接受此不可变值。
@@ -498,6 +533,7 @@ public struct ValidatedInjectionPlan: Codable, Hashable, Sendable {
     public let signing: InjectionSigningMode
     public let customOutputName: String?
     public let stripCodeSignatureIfNeeded: Bool
+    public let rewriteJailbreakDependencies: Bool
 
     fileprivate init(plan: InjectionPlan) {
         input = plan.input
@@ -508,6 +544,38 @@ public struct ValidatedInjectionPlan: Codable, Hashable, Sendable {
         signing = plan.signing
         customOutputName = plan.customOutputName
         stripCodeSignatureIfNeeded = plan.stripCodeSignatureIfNeeded
+        rewriteJailbreakDependencies = plan.rewriteJailbreakDependencies
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case input, items, resources, metadata, components, signing
+        case customOutputName, stripCodeSignatureIfNeeded, rewriteJailbreakDependencies
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        input = try container.decode(InjectionInput.self, forKey: .input)
+        items = try container.decode([InjectionItem].self, forKey: .items)
+        resources = try container.decodeIfPresent([InjectionResource].self, forKey: .resources) ?? []
+        metadata = try container.decodeIfPresent(InjectionMetadataChanges.self, forKey: .metadata) ?? .init()
+        components = try container.decodeIfPresent(InjectionComponentPolicy.self, forKey: .components) ?? .init()
+        signing = try container.decodeIfPresent(InjectionSigningMode.self, forKey: .signing) ?? .adHoc
+        customOutputName = try container.decodeIfPresent(String.self, forKey: .customOutputName)
+        stripCodeSignatureIfNeeded = try container.decodeIfPresent(Bool.self, forKey: .stripCodeSignatureIfNeeded) ?? true
+        rewriteJailbreakDependencies = try container.decodeIfPresent(Bool.self, forKey: .rewriteJailbreakDependencies) ?? true
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(input, forKey: .input)
+        try container.encode(items, forKey: .items)
+        try container.encode(resources, forKey: .resources)
+        try container.encode(metadata, forKey: .metadata)
+        try container.encode(components, forKey: .components)
+        try container.encode(signing, forKey: .signing)
+        try container.encodeIfPresent(customOutputName, forKey: .customOutputName)
+        try container.encode(stripCodeSignatureIfNeeded, forKey: .stripCodeSignatureIfNeeded)
+        try container.encode(rewriteJailbreakDependencies, forKey: .rewriteJailbreakDependencies)
     }
 }
 

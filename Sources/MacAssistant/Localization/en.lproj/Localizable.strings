@@ -86,6 +86,10 @@
 "classdumptab.intro" = "Uses the built-in parser by default, and falls back to an installed class-dump for modern formats such as chained fixups and arm64e.";
 "classdumptab.chooseBinary" = "Choose IPA / Mach-O";
 "classdumptab.chooseApp" = "Choose .app";
+"classdumptab.drop.title" = "Drop IPA / App / Mach-O files here";
+"classdumptab.drop.hint" = "Or click to choose. Multiple inputs are extracted separately in list order.";
+"classdumptab.drop.help" = "Drop files here, or click to choose one or more files in Finder.";
+"classdumptab.selectedCount" = "%d items selected";
 "classdumptab.inspecting" = "Inspecting the Mach-O…";
 "classdumptab.exportSettings" = "Export settings";
 "classdumptab.chooseOutput" = "Choose output folder";
@@ -115,6 +119,11 @@
 "classdumptab.limited.detail.external" = "The built-in parser has limited support for this format, so the installed class-dump is used automatically. Swift types are never disguised as ObjC headers.";
 "classdumptab.limited.detail" = "arm64e and chained fixups are beyond the built-in pointer parser, so an external enhancement is required. No fake headers are generated.";
 "classdumptab.selectingEngine" = "Choosing an available Class Dump engine and analyzing…";
+"classdumptab.batch.start" = "Extracting %d inputs separately in order.";
+"classdumptab.batch.processing" = "[%d/%d] Extracting: %@";
+"classdumptab.batch.success" = "✅ %@: exported %d classes in %d files → %@";
+"classdumptab.batch.failure" = "❌ %@: %@";
+"classdumptab.batch.done" = "Batch extraction finished: %d succeeded, %d failed.";
 "classdumptab.engine.external" = "external enhancement %@";
 "classdumptab.engine.native" = "the built-in pure Swift engine";
 "classdumptab.result.done" = "✅ Export finished with %@ (completeness: %@)";
@@ -421,7 +430,10 @@
 "workbench.recipe.minimumOS.note" = "Defaults to iOS 14.0. Change it if you need another minimum.";
 "workbench.recipe.repairNightIcon" = "Fix dark-mode icon";
 "workbench.recipe.confirmRemoval" = "I confirm deleting the selected Watch / PlugIns / App Clips. Those features will be gone.";
-"workbench.recipe.jailbreakDeps.note" = "Jailbreak dependencies such as CydiaSubstrate absolute paths are rewritten to @rpath during injection. There is no separate toggle.";
+"workbench.recipe.rewriteJailbreakDeps" = "Rewrite jailbreak dependencies";
+"workbench.recipe.jailbreakDeps.note" = "When on, CydiaSubstrate / libsubstrate paths are rewritten into the app. If there is no CydiaSubstrate.framework yet, the bundled stub is copied into Frameworks (not injected into the main executable). That stub depends on libstdc++; on iOS 17+ prefer an in-app or ElleKit CydiaSubstrate.framework.";
+"ipaview.rewriteJailbreakDeps" = "Rewrite jailbreak dependencies";
+"tweaktab.rewriteJailbreakDeps" = "Rewrite jailbreak dependencies";
 "workbench.cannot.removalUnconfirmed" = "Confirm component removal before continuing.";
 "workbench.recipe.save" = "Save recipe…";
 "workbench.recipe.load" = "Load recipe…";
@@ -828,7 +840,7 @@
 "tweaktab.protobufLite3" = "Choose ProtobufLite3.framework";
 "tweaktab.elleKit" = "Optional: ElleKit’s CydiaSubstrate.framework";
 "tweaktab.clear" = "Clear";
-"tweaktab.substrateNote" = "When a tweak depends on CydiaSubstrate it is repointed at @rpath/CydiaSubstrate.framework. Without a compatible stand-in the run fails outright rather than producing an IPA that would crash.";
+"tweaktab.substrateNote" = "With rewrite enabled, CydiaSubstrate / libsubstrate paths are retargeted inside the app. If no framework is present, the bundled stub is copied into Frameworks (not injected). The stub depends on libstdc++; on iOS 17+ prefer ElleKit or an in-app CydiaSubstrate.framework.";
 "tweaktab.weak" = "Use a weak reference (LC_LOAD_WEAK_DYLIB)";
 "tweaktab.stripSignature" = "Strip the code signature when header space runs out";
 "tweaktab.signMethod" = "Re-sign with";
@@ -843,7 +855,7 @@
 "tweaktab.done" = "✅ Injection and local checks finished (Beta — still verify on the target device)";
 "tweaktab.output" = "Output: %@";
 "tweaktab.injected" = "Injected: %@";
-"tweaktab.section.rewrites" = "——— @rpath rewrites ———";
+"tweaktab.section.rewrites" = "——— Rewrite jailbreak dependencies ———";
 "tweaktab.section.warnings" = "——— Notes ———";
 "tweaktab.section.log" = "——— Log ———";
 
@@ -941,11 +953,15 @@
 /* AboutView */
 "about.icon.accessibility" = "Mac Assistant heart icon";
 "about.tagline" = "A native macOS utility & reverse engineering toolbox";
-"about.version" = "Version %@ · GPL-3.0";
+"about.version" = "Version %@";
+"about.github" = "GitHub";
+"about.github.handle" = "iosrxwy";
 "about.github.accessibility" = "Open the iosrxwy GitHub account";
-"about.twitter" = "X · @iOSRXWY";
+"about.twitter" = "X(Twitter)";
+"about.twitter.handle" = "@iOSRXWY";
 "about.twitter.accessibility" = "Open the author's X profile";
-"about.channel" = "Release channel · @iosrxwy";
+"about.channel" = "Telegram";
+"about.channel.handle" = "@iosrxwy";
 "about.channel.accessibility" = "Open the iosrxwy Telegram release channel";
 "about.license" = "This project is open source under GNU GPL-3.0. Distributed modifications must also be released under GPL-3.0 with complete corresponding source. Only use the reverse engineering, modification and repackaging features on files you own or are authorized to modify.";
 "about.thirdParty" = "Open-source acknowledgements & third-party licenses";
@@ -964,11 +980,16 @@
 "about.developer" = "Developer iosrxwy";
 "about.language.title" = "Language";
 "about.language.detail" = "Follows the system language by default. Changes apply immediately.";
+"about.updates.title" = "Software Updates";
 "about.checkForUpdates" = "Check for updates";
 "about.checkForUpdates.accessibility" = "Check whether a new version is available";
-"about.automaticUpdateCheck" = "Check automatically";
+"about.automaticUpdateCheck" = "Auto-check";
 "about.automaticUpdateCheck.hint" = "When on, checks at most once a day";
 "about.updatePrivacy" = "Only queries GitHub for the version number; nothing is uploaded, and nothing is downloaded or installed automatically.";
+"about.revealDownload" = "Show in Finder";
 "about.buildKind.notarized" = "Notarized release (Developer ID)";
 "about.buildKind.development" = "Development build (ad-hoc, not notarized)";
 "about.buildKind.development.hint" = "This is an ad-hoc build that Apple has not notarized, so macOS may block it on first launch. If that happens, open System Settings → Privacy & Security and click “Open Anyway” next to the prompt.";
+"about.copyright" = "© iOS 宝藏 %d–%d";
+"opensource.subtitle" = "Released under GNU GPL-3.0";
+"opensource.license.title" = "License";

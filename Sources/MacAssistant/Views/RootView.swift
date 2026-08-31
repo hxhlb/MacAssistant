@@ -7,6 +7,8 @@ struct RootView: View {
     @StateObject private var workspace: WorkspaceStore
     @StateObject private var updates = UpdateCoordinator()
     @StateObject private var ipaInjectionJob = IpaInjectionJob()
+    @StateObject private var classDumpSession = ClassDumpSession()
+    @State private var ipaTab: IpaView.Tab = .transfer
     /// 语言一变就换掉整棵子树的 identity,让所有 `L(...)` 重新取词条。
     @AppStorage(LocalizationSettings.defaultsKey) private var language = AppLanguage.system.rawValue
 
@@ -48,7 +50,7 @@ struct RootView: View {
                     )
                     sidebarSection(
                         L("root.section.support"),
-                        items: [.environment, .about]
+                        items: [.environment, .about, .opensource]
                     )
                 }
                 .listStyle(.sidebar)
@@ -69,7 +71,7 @@ struct RootView: View {
             isPresented: $updates.isShowingUpdateAlert,
             presenting: updates.pendingUpdate
         ) { _ in
-            Button("查看更新") { updates.openPendingRelease() }
+            Button("下载更新") { updates.downloadPendingUpdate() }
             Button("跳过此版本") { updates.skipPendingVersion() }
             Button("稍后提醒", role: .cancel) { updates.remindLater() }
         } message: { info in
@@ -84,9 +86,6 @@ struct RootView: View {
             Label(item.title, systemImage: item.icon)
                 .foregroundStyle(selected ? AnyShapeStyle(Color.appAccent) : AnyShapeStyle(.primary))
             Spacer(minLength: 4)
-            if item.isBeta {
-                BetaTag()
-            }
         }
         .font(.body.weight(selected ? .medium : .regular))
         .padding(.horizontal, 8)
@@ -105,7 +104,7 @@ struct RootView: View {
             }
         }
         .tag(item)
-        .accessibilityLabel(item.isBeta ? L("root.accessibility.beta", item.title) : item.title)
+        .accessibilityLabel(item.title)
         .accessibilityHint(L("root.accessibility.open", item.title))
         .accessibilityValue(selected ? L("root.accessibility.selected") : "")
         .accessibilityIdentifier("sidebar.\(item.rawValue)")
@@ -137,19 +136,6 @@ struct RootView: View {
         }
     }
 
-    private struct BetaTag: View {
-        var body: some View {
-            Text("Beta")
-                .font(.system(size: 9, weight: .semibold))
-                .textCase(.uppercase)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .insetSurfaceBackground(Capsule(), legacyFill: .secondary.opacity(0.16))
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-        }
-    }
-
     @ViewBuilder
     private var detail: some View {
         switch (selection ?? .dashboard).destination {
@@ -162,11 +148,17 @@ struct RootView: View {
         case .recipes: RecipesView()
         case .deb: DebView(workspace: workspace)
         case .dylib: DylibView(workspace: workspace)
-        case .ipa: IpaView(injectionJob: ipaInjectionJob, workspace: workspace)
+        case .ipa: IpaView(
+            injectionJob: ipaInjectionJob,
+            classDumpSession: classDumpSession,
+            workspace: workspace,
+            tab: $ipaTab
+        )
         case .macApp: MacAppView()
         case .binary: BinaryView()
         case .environment: EnvironmentView()
         case .about: AboutView(updates: updates)
+        case .opensource: OpenSourceView()
         }
     }
 }

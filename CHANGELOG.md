@@ -4,6 +4,12 @@ All notable changes to MacAssistant are recorded here.
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-08-31
+
+- Improve automatic jailbreak-dependency rewriting during IPA injection
+- Fix process-file handling when importing a Douyin IPA for header extraction
+- Polish UI and improve the overall experience
+
 ## [1.0.1] - 2026-08-29
 
 First official release after `v1.0.0-beta.4`. Ad-hoc signed; not notarized by Apple. Chinese: [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
@@ -106,6 +112,7 @@ First public prerelease.
 
 This prerelease is ad-hoc signed and not notarized. macOS may block the first launch. Open the app once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. Full steps: [README](README.md#first-launch-blocked-by-macos).
 
+[1.0.2]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.2
 [1.0.1]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.1
 [1.0.0-beta.4]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.0-beta.4
 [1.0.0-beta.3]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.0-beta.3

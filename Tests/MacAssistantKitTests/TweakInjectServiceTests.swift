@@ -5,7 +5,22 @@ final class TweakInjectServiceTests: XCTestCase {
 
     func testRewriteSubstrateFramework() {
         let to = TweakInjectService.rewriteTarget(for: "/Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate")
-        XCTAssertEqual(to, "@rpath/CydiaSubstrate.framework/CydiaSubstrate")
+        XCTAssertEqual(to, "@rpath/libsubstrate.dylib")
+    }
+
+    func testRewriteUsrLibSubstrate() {
+        XCTAssertEqual(
+            TweakInjectService.rewriteTarget(for: "/usr/lib/libsubstrate.dylib"),
+            "@rpath/libsubstrate.dylib"
+        )
+    }
+
+    func testRewriteExistingRpathSubstrateInStubMode() {
+        XCTAssertNil(TweakInjectService.rewriteTarget(for: "@rpath/libsubstrate.dylib"))
+        XCTAssertEqual(
+            TweakInjectService.rewriteTarget(for: "@rpath/CydiaSubstrate.framework/CydiaSubstrate"),
+            "@rpath/libsubstrate.dylib"
+        )
     }
 
     func testRewriteGenericFramework() {
@@ -42,7 +57,9 @@ final class TweakInjectServiceTests: XCTestCase {
         ]
         let plan = TweakInjectService.planRewrites(for: deps)
         XCTAssertEqual(plan.count, 1)
-        XCTAssertTrue(TweakInjectService.requiresSubstrateFramework(plan))
+        XCTAssertEqual(plan[0].to, "@rpath/libsubstrate.dylib")
+        XCTAssertFalse(TweakInjectService.requiresSubstrateFramework(plan))
+        XCTAssertTrue(TweakInjectService.requiresSubstrateRuntime(plan))
     }
 
     func testInjectTweaksUsesValidatedWorkflow() throws {

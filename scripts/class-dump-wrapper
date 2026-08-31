@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_NAME="$(basename "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REAL_CLASS_DUMP="$SCRIPT_DIR/class-dump-real"
+
+if [ ! -x "$REAL_CLASS_DUMP" ]; then
+  echo "$SCRIPT_NAME: real class-dump not found at: $REAL_CLASS_DUMP" >&2
+  exit 1
+fi
+
+usage() {
+  "$REAL_CLASS_DUMP"
+  cat >&2 <<'EOF'
+
+Auto header dump:
+  class-dump /path/to/AppBinary
+  class-dump /path/to/App.ipa
+
+With one file argument, this wrapper automatically writes headers to:
+  /path/to/AppBinary_headers
+  /path/to/App_headers
+
+For an IPA, the largest Mach-O in the main executable and Frameworks is selected.
+Pass normal class-dump options to use raw class-dump behavior.
+EOF
+}
+
+if [ "$#" -eq 0 ]; then
+  usage
+  exit 0
+fi
+
+if [ "$#" -ne 1 ] || [[ "$1" == -* ]]; then
+  exec "$REAL_CLASS_DUMP" "$@"
+fi
+
+INPUT="$1"
+
+if [ ! -f "$INPUT" ]; then
+  echo "$SCRIPT_NAME: input file not found: $INPUT" >&2
+  exit 1
+fi
+
+INPUT_DIR="$(cd "$(dirname "$INPUT")" && pwd)"
+INPUT_NAME="$(basename "$INPUT")"
+INPUT_BASE="${INPUT_NAME%.*}"
+INPUT_EXT="${INPUT_NAME##*.}"
+OUTPUT_DIR="$INPUT_DIR/${INPUT_BASE}_headers"
+
+dump_macho() {
+  local macho="$1"
+  local output_dir="$2"
+
+  mkdir -p "$output_dir"
+  echo "Selected Mach-O: $macho"
+  "$REAL_CLASS_DUMP" --arch arm64 -H "$macho" -o "$output_dir"
+  echo "Headers written to: $output_dir"
+}
+
+logical_file_size() {
+  stat -f '%z' "$1"
+}
+
+largest_app_process_macho() {
+  local app_dir="$1"
+  local executable best best_size candidate candidate_size
+
+  executable="$(plutil -extract CFBundleExecutable raw -o - "$app_dir/Info.plist")"
+  best="$app_dir/$executable"
+  if [ ! -f "$best" ]; then
+    echo "$SCRIPT_NAME: main executable not found: $best" >&2
+    return 1
+  fi
+  best_size="$(logical_file_size "$best")"
+
+  if [ -d "$app_dir/Frameworks" ]; then
+    while IFS= read -r -d '' candidate; do
+      if ! file -b "$candidate" | grep -q 'Mach-O'; then
+        continue
+      fi
+      candidate_size="$(logical_file_size "$candidate")"
+      if [ "$candidate_size" -gt "$best_size" ]; then
+        best="$candidate"
+        best_size="$candidate_size"
+      fi
+    done < <(find "$app_dir/Frameworks" -type f -print0)
+  fi
+
+  printf '%s\n' "$best"
+}
+
+case "$(printf '%s' "$INPUT_EXT" | tr '[:upper:]' '[:lower:]')" in
+  ipa)
+    TMP_DIR="$(mktemp -d)"
+    trap 'rm -rf "$TMP_DIR"' EXIT
+
+    unzip -q "$INPUT" -d "$TMP_DIR"
+
+    APP_DIR="$(find "$TMP_DIR/Payload" -maxdepth 1 -name '*.app' -type d | head -n 1)"
+    if [ -z "$APP_DIR" ]; then
+      echo "$SCRIPT_NAME: no .app found inside IPA: $INPUT" >&2
+      exit 1
+    fi
+
+    SELECTED_MACHO="$(largest_app_process_macho "$APP_DIR")"
+    dump_macho "$SELECTED_MACHO" "$OUTPUT_DIR"
+    ;;
+  *)
+    dump_macho "$INPUT" "$OUTPUT_DIR"
+    ;;
+esac

@@ -94,6 +94,7 @@ private enum LC {
     static let codeSignature: UInt32 = 0x1d
     static let segment: UInt32 = 0x01
     static let segment64: UInt32 = 0x19
+    static let rpath: UInt32 = 0x1c | 0x8000_0000
 }
 
 /// 原生实现的 Mach-O dylib 注入器。
@@ -353,6 +354,7 @@ public enum DylibInjector {
         let path: String
         let command: UInt32
         let offset: Int
+        let size: Int
         let littleEndian: Bool
     }
 
@@ -395,6 +397,7 @@ public enum DylibInjector {
                             path: String(decoding: b[start..<end], as: UTF8.self),
                             command: cmd,
                             offset: p,
+                            size: cmdsize,
                             littleEndian: le
                         )
                     )
@@ -516,5 +519,270 @@ public enum DylibInjector {
         writeU32(&b, sizeofcmdsOff, sizeofcmds, littleEndian: le)
         report.injectedSliceCount += 1
         report.messages.append(L("dylib.macho.log.injectedIntoSlice", is64 ? "64" : "32", dylibPath))
+    }
+
+    /// 把已有 `LC_LOAD_*` 的路径改成新值。新路径更长时先删再插入，不改 `LC_ID_DYLIB`。
+    public static func changeLoadCommand(
+        from old: String,
+        to new: String,
+        fileAt url: URL,
+        stripCodeSignature: Bool = true
+    ) throws {
+        var bytes = [UInt8](try Data(contentsOf: url))
+        try changeLoadCommand(from: old, to: new, bytes: &bytes, stripCodeSignature: stripCodeSignature)
+        try Data(bytes).write(to: url, options: .atomic)
+    }
+
+    public static func changeLoadCommand(
+        from old: String,
+        to new: String,
+        bytes: inout [UInt8],
+        stripCodeSignature: Bool = true
+    ) throws {
+        guard !new.isEmpty, !new.utf8.contains(0) else {
+            throw MachOError.unsupported(L("dylib.macho.unsupported.emptyPath"))
+        }
+        let slices = try parseSlices(bytes)
+        guard !slices.isEmpty else { throw MachOError.emptyFat }
+        var changed = false
+        for slice in slices {
+            var matches = try dylibCommandLocations(
+                bytes,
+                sliceOffset: slice.offset,
+                sliceSize: slice.size
+            ).filter { $0.path == old }
+            while let match = matches.first {
+                if try rewriteLoadPathInPlace(&bytes, location: match, newPath: new) {
+                    changed = true
+                } else {
+                    try removeLoadCommand(
+                        &bytes,
+                        sliceOffset: slice.offset,
+                        sliceSize: slice.size,
+                        commandOffset: match.offset,
+                        commandSize: match.size
+                    )
+                    var report = InjectionReport()
+                    try injectIntoSlice(
+                        &bytes,
+                        sliceOffset: slice.offset,
+                        sliceSize: slice.size,
+                        dylibPath: new,
+                        weak: match.command == LC.loadWeakDylib,
+                        stripCodeSignature: stripCodeSignature,
+                        report: &report
+                    )
+                    changed = true
+                }
+                matches = try dylibCommandLocations(
+                    bytes,
+                    sliceOffset: slice.offset,
+                    sliceSize: slice.size
+                ).filter { $0.path == old }
+            }
+        }
+        guard changed else {
+            throw MachOError.unsupported(L("dylib.macho.unsupported.changeMissing", old))
+        }
+    }
+
+    /// 各切片补上缺失的 `LC_RPATH`。已有的切片跳过。
+    public static func addRPath(
+        _ path: String,
+        fileAt url: URL,
+        stripCodeSignature: Bool = true
+    ) throws {
+        var bytes = [UInt8](try Data(contentsOf: url))
+        try addRPath(path, bytes: &bytes, stripCodeSignature: stripCodeSignature)
+        try Data(bytes).write(to: url, options: .atomic)
+    }
+
+    public static func addRPath(
+        _ path: String,
+        bytes: inout [UInt8],
+        stripCodeSignature: Bool = true
+    ) throws {
+        guard !path.isEmpty, !path.utf8.contains(0) else {
+            throw MachOError.unsupported(L("dylib.macho.unsupported.emptyPath"))
+        }
+        let slices = try parseSlices(bytes)
+        guard !slices.isEmpty else { throw MachOError.emptyFat }
+        var report = InjectionReport()
+        for slice in slices {
+            let existing = try rpathStrings(bytes, sliceOffset: slice.offset, sliceSize: slice.size)
+            if existing.contains(path) { continue }
+            try injectRPathIntoSlice(
+                &bytes,
+                sliceOffset: slice.offset,
+                sliceSize: slice.size,
+                path: path,
+                stripCodeSignature: stripCodeSignature,
+                report: &report
+            )
+        }
+    }
+
+    private static func rewriteLoadPathInPlace(
+        _ b: inout [UInt8],
+        location: DylibCommandLocation,
+        newPath: String
+    ) throws -> Bool {
+        let nameOff = Int(readU32(b, location.offset + 8, littleEndian: location.littleEndian))
+        guard nameOff >= 12, nameOff < location.size else { return false }
+        let capacity = location.size - nameOff
+        let needed = newPath.utf8.count + 1
+        guard needed <= capacity else { return false }
+        let start = location.offset + nameOff
+        for i in 0..<capacity { b[start + i] = 0 }
+        for (index, byte) in newPath.utf8.enumerated() {
+            b[start + index] = byte
+        }
+        return true
+    }
+
+    private static func removeLoadCommand(
+        _ b: inout [UInt8],
+        sliceOffset: Int,
+        sliceSize: Int,
+        commandOffset: Int,
+        commandSize: Int
+    ) throws {
+        let (_, le, headerSize) = try headerInfo(b, sliceOffset: sliceOffset)
+        let ncmdsOff = sliceOffset + 16
+        let sizeofcmdsOff = sliceOffset + 20
+        var ncmds = readU32(b, ncmdsOff, littleEndian: le)
+        var sizeofcmds = readU32(b, sizeofcmdsOff, littleEndian: le)
+        let loadCommandsStart = sliceOffset + headerSize
+        let cmdsEnd = loadCommandsStart + Int(sizeofcmds)
+        let tailStart = commandOffset + commandSize
+        guard commandOffset >= loadCommandsStart, tailStart <= cmdsEnd, commandSize >= 8 else {
+            throw MachOError.truncated
+        }
+        let moveCount = cmdsEnd - tailStart
+        if moveCount > 0 {
+            for i in 0..<moveCount { b[commandOffset + i] = b[tailStart + i] }
+        }
+        for i in (commandOffset + moveCount)..<cmdsEnd { b[i] = 0 }
+        ncmds -= 1
+        sizeofcmds -= UInt32(commandSize)
+        writeU32(&b, ncmdsOff, ncmds, littleEndian: le)
+        writeU32(&b, sizeofcmdsOff, sizeofcmds, littleEndian: le)
+        _ = sliceSize
+    }
+
+    private static func rpathStrings(_ b: [UInt8], sliceOffset: Int, sliceSize: Int) throws -> [String] {
+        let (_, le, headerSize) = try headerInfo(b, sliceOffset: sliceOffset)
+        guard sliceSize >= headerSize else { throw MachOError.truncated }
+        let ncmds = Int(readU32(b, sliceOffset + 16, littleEndian: le))
+        let sizeofcmds = Int(readU32(b, sliceOffset + 20, littleEndian: le))
+        let commandsEnd = sliceOffset + headerSize + sizeofcmds
+        var paths: [String] = []
+        var p = sliceOffset + headerSize
+        for _ in 0..<ncmds {
+            guard p + 8 <= commandsEnd else { throw MachOError.truncated }
+            let cmd = readU32(b, p, littleEndian: le)
+            let cmdsize = Int(readU32(b, p + 4, littleEndian: le))
+            guard cmdsize >= 8, p + cmdsize <= commandsEnd else { throw MachOError.truncated }
+            if cmd == LC.rpath, cmdsize >= 12 {
+                let nameOff = Int(readU32(b, p + 8, littleEndian: le))
+                if nameOff >= 8, nameOff < cmdsize {
+                    let start = p + nameOff
+                    var end = start
+                    while end < p + cmdsize && b[end] != 0 { end += 1 }
+                    paths.append(String(decoding: b[start..<end], as: UTF8.self))
+                }
+            }
+            p += cmdsize
+        }
+        return paths
+    }
+
+    private static func injectRPathIntoSlice(
+        _ b: inout [UInt8],
+        sliceOffset: Int,
+        sliceSize: Int,
+        path: String,
+        stripCodeSignature: Bool,
+        report: inout InjectionReport
+    ) throws {
+        let (is64, le, headerSize) = try headerInfo(b, sliceOffset: sliceOffset)
+        let ncmdsOff = sliceOffset + 16
+        let sizeofcmdsOff = sliceOffset + 20
+        var ncmds = readU32(b, ncmdsOff, littleEndian: le)
+        var sizeofcmds = readU32(b, sizeofcmdsOff, littleEndian: le)
+        let loadCommandsStart = sliceOffset + headerSize
+        let cmdsEndAbs = loadCommandsStart + Int(sizeofcmds)
+        var minSectionOffset = sliceSize
+        var codeSigOffset: Int?
+        var codeSigSize = 0
+        var p = loadCommandsStart
+        for _ in 0..<ncmds {
+            guard p + 8 <= cmdsEndAbs else { throw MachOError.truncated }
+            let cmd = readU32(b, p, littleEndian: le)
+            let cmdsize = Int(readU32(b, p + 4, littleEndian: le))
+            guard cmdsize >= 8, p + cmdsize <= cmdsEndAbs else { throw MachOError.truncated }
+            if cmd == LC.segment64, cmdsize >= 72 {
+                let nsects = Int(readU32(b, p + 64, littleEndian: le))
+                var s = p + 72
+                for _ in 0..<nsects {
+                    let off = Int(readU32(b, s + 48, littleEndian: le))
+                    if off > 0 { minSectionOffset = min(minSectionOffset, off) }
+                    s += 80
+                }
+            } else if cmd == LC.segment, cmdsize >= 56 {
+                let nsects = Int(readU32(b, p + 48, littleEndian: le))
+                var s = p + 56
+                for _ in 0..<nsects {
+                    let off = Int(readU32(b, s + 40, littleEndian: le))
+                    if off > 0 { minSectionOffset = min(minSectionOffset, off) }
+                    s += 68
+                }
+            } else if cmd == LC.codeSignature {
+                codeSigOffset = p
+                codeSigSize = cmdsize
+            }
+            p += cmdsize
+        }
+
+        let align = is64 ? 8 : 4
+        var cmdSize = 12 + path.utf8.count + 1
+        cmdSize = (cmdSize + (align - 1)) & ~(align - 1)
+
+        func hasRoom() -> Bool {
+            let end = headerSize + Int(sizeofcmds) + cmdSize
+            guard end <= minSectionOffset else { return false }
+            let writeAbs = loadCommandsStart + Int(sizeofcmds)
+            guard writeAbs <= sliceOffset + sliceSize, cmdSize <= sliceOffset + sliceSize - writeAbs else {
+                return false
+            }
+            for i in 0..<cmdSize where b[writeAbs + i] != 0 { return false }
+            return true
+        }
+
+        if !hasRoom(), stripCodeSignature, let csOff = codeSigOffset {
+            let tailStart = csOff + codeSigSize
+            let end = loadCommandsStart + Int(sizeofcmds)
+            if tailStart <= end {
+                let moveCount = end - tailStart
+                for i in 0..<moveCount { b[csOff + i] = b[tailStart + i] }
+                for i in (csOff + moveCount)..<end { b[i] = 0 }
+                ncmds -= 1
+                sizeofcmds -= UInt32(codeSigSize)
+                writeU32(&b, ncmdsOff, ncmds, littleEndian: le)
+                writeU32(&b, sizeofcmdsOff, sizeofcmds, littleEndian: le)
+                report.strippedSignature = true
+            }
+        }
+
+        guard hasRoom() else { throw MachOError.noSpace(arch: is64 ? "64-bit" : "32-bit") }
+        let writeAbs = loadCommandsStart + Int(sizeofcmds)
+        writeU32(&b, writeAbs + 0, LC.rpath, littleEndian: le)
+        writeU32(&b, writeAbs + 4, UInt32(cmdSize), littleEndian: le)
+        writeU32(&b, writeAbs + 8, 12, littleEndian: le)
+        for (index, byte) in path.utf8.enumerated() { b[writeAbs + 12 + index] = byte }
+        ncmds += 1
+        sizeofcmds += UInt32(cmdSize)
+        writeU32(&b, ncmdsOff, ncmds, littleEndian: le)
+        writeU32(&b, sizeofcmdsOff, sizeofcmds, littleEndian: le)
     }
 }

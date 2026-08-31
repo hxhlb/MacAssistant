@@ -2,11 +2,6 @@ import SwiftUI
 import AppKit
 import MacAssistantKit
 
-private enum AboutLayout {
-    /// 正文块统一宽度：说明文字、更新区与折叠项共用同一条左右边界。
-    static let contentWidth: CGFloat = 520
-}
-
 struct AboutView: View {
     @ObservedObject var updates: UpdateCoordinator
     @AppStorage(LocalizationSettings.defaultsKey) private var language = AppLanguage.system.rawValue
@@ -25,243 +20,216 @@ struct AboutView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 18) {
-            Image(nsImage: NSApplication.shared.applicationIconImage)
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 112, height: 112)
-                .accessibilityLabel(L("about.icon.accessibility"))
-
-            VStack(spacing: 5) {
-                Text(L("root.appName"))
-                    .font(.title2.weight(.semibold))
-                Text(L("about.tagline"))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Text(L("about.version", version))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(L("about.developer"))
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
+        FeatureScaffold(title: SidebarItem.about.title, subtitle: L("about.tagline")) {
+            Card {
+                identityHeader
             }
-            .accessibilityElement(children: .combine)
-
-            buildKindSection
-
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) {
-                    publishButtons
-                }
-                VStack(spacing: 8) {
-                    HStack(spacing: 10) {
-                        githubButton
-                        twitterButton
-                    }
-                    telegramButton
-                }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
-
-            languageSection
-            updateSection
-
-            Text(L("about.license"))
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: AboutLayout.contentWidth)
-
-            // 页面其余内容都是居中的短文本，折叠项的标签却必然靠左。收进卡片后左对齐
-            // 是容器内的正常行为，不会显得偏离整页的居中轴线。
             Card {
                 VStack(alignment: .leading, spacing: 0) {
-                    DisclosureGroup(L("about.thirdParty")) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(L("about.thirdParty.detail"))
-                            VStack(alignment: .leading, spacing: 6) {
-                                Button(L("about.thirdParty.altSign")) {
-                                    NSWorkspace.shared.open(ProductLinks.altSignProject)
-                                }
-                                Button(L("about.thirdParty.altStore")) {
-                                    NSWorkspace.shared.open(ProductLinks.altStoreGitHub)
-                                }
-                                Button(L("about.thirdParty.xtool")) {
-                                    NSWorkspace.shared.open(ProductLinks.xtoolProject)
-                                }
-                                Button(L("about.thirdParty.libimobiledevice")) {
-                                    NSWorkspace.shared.open(ProductLinks.libimobiledevice)
-                                }
-                                Button(L("about.thirdParty.theos")) {
-                                    NSWorkspace.shared.open(ProductLinks.theosProject)
-                                }
-                                Button(L("about.thirdParty.zsign")) {
-                                    NSWorkspace.shared.open(ProductLinks.zsignProject)
-                                }
-                                Button(L("about.thirdParty.classDump")) {
-                                    NSWorkspace.shared.open(ProductLinks.classDumpProject)
-                                }
-                                Button(L("about.thirdParty.dsdump")) {
-                                    NSWorkspace.shared.open(ProductLinks.dsdumpProject)
-                                }
-                            }
-                        }
-                        .font(.caption)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 6)
-                    }
-
-                    Divider().padding(.vertical, 10)
-
-                    DisclosureGroup(L("about.privacy")) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(L("about.privacy.detail"))
-                            Button(L("about.privacy.apple")) {
-                                NSWorkspace.shared.open(ProductLinks.applePlatformSecurity)
-                            }
-                        }
-                        .font(.caption)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 6)
-                    }
+                    languageRow
+                    Divider().padding(.vertical, 12)
+                    updateBlock
                 }
-                .font(.callout)
             }
-            .frame(maxWidth: AboutLayout.contentWidth)
-
+            Card {
+                privacyBlock
             }
-            .frame(maxWidth: .infinity)
-            .padding(32)
+            footer
         }
-        .featureSurfaceBackground()
         .navigationTitle(SidebarItem.about.title)
     }
 
-    @ViewBuilder
-    private var publishButtons: some View {
-        githubButton
-        twitterButton
-        telegramButton
+    /// 仓库最早提交在 2026，版权跨度从那时起到今年。
+    private var copyrightText: String {
+        let startYear = 2026
+        let currentYear = Calendar.current.component(.year, from: Date())
+        return L("about.copyright", startYear, currentYear)
     }
 
-    private var githubButton: some View {
-        Button {
-            NSWorkspace.shared.open(ProductLinks.github)
-        } label: {
-            Label("GitHub · iosrxwy", systemImage: "chevron.left.forwardslash.chevron.right")
-        }
-        .accessibilityLabel(L("about.github.accessibility"))
-        .accessibilityHint(ProductLinks.github.absoluteString)
-        .accessibilityIdentifier("about.github")
-    }
+    private var identityHeader: some View {
+        HStack(alignment: .center, spacing: 14) {
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 56, height: 56)
+                .accessibilityLabel(L("about.icon.accessibility"))
 
-    private var twitterButton: some View {
-        Button {
-            NSWorkspace.shared.open(ProductLinks.twitter)
-        } label: {
-            Label(L("about.twitter"), systemImage: "at")
-        }
-        .accessibilityLabel(L("about.twitter.accessibility"))
-        .accessibilityHint(ProductLinks.twitter.absoluteString)
-        .accessibilityIdentifier("about.twitter")
-    }
-
-    private var telegramButton: some View {
-        Button {
-            NSWorkspace.shared.open(ProductLinks.releaseChannel)
-        } label: {
-            Label(L("about.channel"), systemImage: "paperplane")
-        }
-        .accessibilityLabel(L("about.channel.accessibility"))
-        .accessibilityHint(ProductLinks.releaseChannel.absoluteString)
-        .accessibilityIdentifier("about.telegram")
-    }
-
-    private var languageSection: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 14) {
-                Label(L("about.language.title"), systemImage: "globe")
-                Picker("", selection: $language) {
-                    ForEach(AppLanguage.allCases) { option in
-                        Text(option.displayName).tag(option.rawValue)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(width: 200)
-                .accessibilityLabel(L("about.language.title"))
-                .accessibilityIdentifier("about.language")
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L("root.appName"))
+                    .font(.title2.weight(.semibold))
+                Text("\(L("about.version", version))  ·  \(L("about.developer"))")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                buildKindBadge
             }
-            Text(L("about.language.detail"))
+            .accessibilityElement(children: .combine)
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var footer: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 18) {
+                socialLink(
+                    glyph: .github,
+                    title: L("about.github"),
+                    url: ProductLinks.github,
+                    accessibilityLabel: L("about.github.accessibility"),
+                    identifier: "about.github"
+                )
+                socialLink(
+                    glyph: .x,
+                    title: L("about.twitter"),
+                    url: ProductLinks.twitter,
+                    accessibilityLabel: L("about.twitter.accessibility"),
+                    identifier: "about.twitter"
+                )
+                socialLink(
+                    glyph: .telegram,
+                    title: L("about.channel"),
+                    url: ProductLinks.releaseChannel,
+                    accessibilityLabel: L("about.channel.accessibility"),
+                    identifier: "about.telegram"
+                )
+            }
+            Text(copyrightText)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: AboutLayout.contentWidth)
+        .frame(maxWidth: .infinity)
+        .padding(.top, 36)
     }
 
-    private var updateSection: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 14) {
-                Button {
-                    Task { await updates.runManualCheck() }
-                } label: {
-                    if updates.isChecking {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Label(L("about.checkForUpdates"), systemImage: "arrow.triangle.2.circlepath")
-                    }
-                }
-                .buttonStyle(.bordered)
-                .disabled(updates.isChecking)
-                .accessibilityLabel(L("about.checkForUpdates.accessibility"))
-                .accessibilityIdentifier("about.checkForUpdates")
+    private func socialLink(
+        glyph: BrandIcon.Glyph,
+        title: String,
+        url: URL,
+        accessibilityLabel: String,
+        identifier: String
+    ) -> some View {
+        Button {
+            NSWorkspace.shared.open(url)
+        } label: {
+            HStack(spacing: 6) {
+                BrandIcon(glyph: glyph, size: 12)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(.callout)
+            }
+            .foregroundStyle(Color.accentColor)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(url.absoluteString)
+        .accessibilityIdentifier(identifier)
+    }
 
-                Toggle(L("about.automaticUpdateCheck"), isOn: $updates.automaticCheckEnabled)
+    private func settingsLabel(_ title: String, systemImage: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .frame(width: 16, alignment: .center)
+                .foregroundStyle(.secondary)
+            Text(title)
+                .font(.body.weight(.medium))
+        }
+    }
+
+    private var languageRow: some View {
+        HStack(spacing: 12) {
+            settingsLabel(L("about.language.title"), systemImage: "globe")
+            Spacer(minLength: 12)
+            Picker("", selection: $language) {
+                ForEach(AppLanguage.allCases) { option in
+                    Text(option.displayName).tag(option.rawValue)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
+            .accessibilityLabel(L("about.language.title"))
+            .accessibilityIdentifier("about.language")
+        }
+    }
+
+    private var updateBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                settingsLabel(L("about.updates.title"), systemImage: "arrow.triangle.2.circlepath")
+                Spacer(minLength: 12)
+                if updates.isDownloading {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button {
+                        Task { await updates.runManualCheck() }
+                    } label: {
+                        if updates.isChecking {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text(L("about.checkForUpdates"))
+                        }
+                    }
+                    .disabled(updates.isChecking)
+                    .accessibilityLabel(L("about.checkForUpdates.accessibility"))
+                    .accessibilityIdentifier("about.checkForUpdates")
+                }
+            }
+
+            HStack(spacing: 12) {
+                settingsLabel(L("about.automaticUpdateCheck"), systemImage: "clock.arrow.circlepath")
+                Spacer(minLength: 12)
+                Toggle("", isOn: $updates.automaticCheckEnabled)
                     .toggleStyle(.switch)
                     .controlSize(.small)
-                    .fixedSize()
+                    .labelsHidden()
+                    .accessibilityLabel(L("about.automaticUpdateCheck"))
                     .accessibilityHint(L("about.automaticUpdateCheck.hint"))
                     .accessibilityIdentifier("about.automaticUpdateCheck")
             }
 
-            Text(updates.statusText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            if let status = updates.statusText {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if case .finished = updates.downloadState {
+                        Button(L("about.revealDownload")) {
+                            updates.revealDownloadedFile()
+                        }
+                        .buttonStyle(.link)
+                        .font(.caption)
+                    }
+                }
                 .accessibilityIdentifier("about.updateStatus")
-
-            Text(L("about.updatePrivacy"))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            }
         }
-        .frame(maxWidth: AboutLayout.contentWidth)
     }
 
-    /// 如实区分构建种类:已公证发行版给出中性提示;开发构建（ad-hoc、未公证）明确警告
-    /// macOS 可能拦截,并指引用户到「系统设置 → 隐私与安全性 → 仍要打开」。
+    private var privacyBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(L("about.privacy"))
+                .font(.headline)
+            Text(L("about.privacy.detail"))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     @ViewBuilder
-    private var buildKindSection: some View {
+    private var buildKindBadge: some View {
         if isNotarizedRelease {
             Label(L("about.buildKind.notarized"), systemImage: "checkmark.seal")
                 .font(.caption)
                 .foregroundStyle(.green)
                 .accessibilityIdentifier("about.buildKind")
         } else {
-            VStack(spacing: 4) {
-                Label(L("about.buildKind.development"), systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                Text(L("about.buildKind.development.hint"))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: AboutLayout.contentWidth)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("about.buildKind")
+            Label(L("about.buildKind.development"), systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .accessibilityIdentifier("about.buildKind")
         }
     }
 }

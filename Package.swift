@@ -23,7 +23,8 @@ let package = Package(
             dependencies: ["AssetCatalogSupport"],
             path: "Sources/MacAssistantKit",
             resources: [
-                .process("Localization")
+                .process("Localization"),
+                .copy("Resources/libsubstrate.dylib")
             ]
         ),
         .executableTarget(

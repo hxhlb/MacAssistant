@@ -609,6 +609,8 @@ public struct InjectionRecipe: Codable, Hashable, Sendable, Identifiable {
     }
     /// 旧全局宿主字段，仅兼容旧 recipe JSON。装配时不再套到每个 dylib 上。
     public var injectionHost: PreferredInjectionHost.Choice
+    /// 自动改写越狱依赖，并在没有现成 CydiaSubstrate.framework 时拷入内置 stub。
+    public var rewriteJailbreakDependencies: Bool
 
     public init(
         id: UUID = UUID(),
@@ -620,7 +622,8 @@ public struct InjectionRecipe: Codable, Hashable, Sendable, Identifiable {
         stripCodeSignatureIfNeeded: Bool = true,
         leaveUnsigned: Bool = true,
         sideloadSigning: SideloadSigningChoice? = nil,
-        injectionHost: PreferredInjectionHost.Choice = .automatic
+        injectionHost: PreferredInjectionHost.Choice = .automatic,
+        rewriteJailbreakDependencies: Bool = true
     ) {
         self.schemaVersion = Self.currentSchemaVersion
         self.id = id
@@ -636,6 +639,7 @@ public struct InjectionRecipe: Codable, Hashable, Sendable, Identifiable {
             self.sideloadSigning = leaveUnsigned ? .none : .appleID
         }
         self.injectionHost = injectionHost
+        self.rewriteJailbreakDependencies = rewriteJailbreakDependencies
     }
 
     public func mapping(for dylibName: String) -> RecipeTargetMapping? {
@@ -648,6 +652,7 @@ public struct InjectionRecipe: Codable, Hashable, Sendable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, id, name, injectionOrder, targetMappings
         case components, metadata, stripCodeSignatureIfNeeded, leaveUnsigned, sideloadSigning, injectionHost
+        case rewriteJailbreakDependencies
     }
 
     public init(from decoder: Decoder) throws {
@@ -675,6 +680,7 @@ public struct InjectionRecipe: Codable, Hashable, Sendable, Identifiable {
             sideloadSigning = unsigned ? .none : .appleID
         }
         injectionHost = try c.decodeIfPresent(PreferredInjectionHost.Choice.self, forKey: .injectionHost) ?? .automatic
+        rewriteJailbreakDependencies = try c.decodeIfPresent(Bool.self, forKey: .rewriteJailbreakDependencies) ?? true
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -690,6 +696,7 @@ public struct InjectionRecipe: Codable, Hashable, Sendable, Identifiable {
         try c.encode(leaveUnsigned, forKey: .leaveUnsigned)
         try c.encode(sideloadSigning, forKey: .sideloadSigning)
         try c.encode(injectionHost, forKey: .injectionHost)
+        try c.encode(rewriteJailbreakDependencies, forKey: .rewriteJailbreakDependencies)
     }
 
     public func encoded() throws -> Data {
@@ -784,7 +791,8 @@ public enum WorkspacePlanAssembler {
             components: inputs.recipe.components,
             signing: inputs.signing,
             customOutputName: inputs.customOutputName,
-            stripCodeSignatureIfNeeded: inputs.recipe.stripCodeSignatureIfNeeded
+            stripCodeSignatureIfNeeded: inputs.recipe.stripCodeSignatureIfNeeded,
+            rewriteJailbreakDependencies: inputs.recipe.rewriteJailbreakDependencies
         )
     }
 

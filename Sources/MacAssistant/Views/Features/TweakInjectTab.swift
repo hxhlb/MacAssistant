@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import MacAssistantKit
 
-/// 插件 / tweak 注入:支持多个 .dylib 或 .deb,自动 @rpath 改写 + 重签 + 重打包。
+/// 插件 / tweak 注入:支持多个 .dylib 或 .deb，可自动修改越狱依赖 + 重签 + 重打包。
 struct TweakInjectTab: View {
     let inputMode: InjectionInputMode
     let managedInput: Bool
@@ -22,6 +22,7 @@ struct TweakInjectTab: View {
     @State private var protobufLite2: URL?
     @State private var protobufLite3: URL?
 
+    @State private var rewriteJailbreakDependencies = true
     @State private var weak = false
     @State private var stripSignature = true
     @State private var signMethod: SignMethod = .codesignAdhoc
@@ -110,6 +111,7 @@ struct TweakInjectTab: View {
                         Spacer()
                     }
                     if let elleKit { PathBadge(url: elleKit) }
+                    Toggle(L("tweaktab.rewriteJailbreakDeps"), isOn: $rewriteJailbreakDependencies)
                     Text(L("tweaktab.substrateNote"))
                         .font(.caption).foregroundStyle(.secondary)
                     Toggle(L("tweaktab.weak"), isOn: $weak)
@@ -192,7 +194,8 @@ struct TweakInjectTab: View {
                                          frameworks: [protobufLite2, protobufLite3].compactMap { $0 } + extraFrameworks,
                                          weak: weak, stripCodeSignature: stripSignature,
                                          signMethod: signMethod,
-                                         deviceSigning: deviceSigning)
+                                         deviceSigning: deviceSigning,
+                                         rewriteJailbreakDependencies: rewriteJailbreakDependencies)
         let profileURLs = options.deviceSigning.map { Array($0.profilesByBundleID.values) } ?? []
         let accessURLs = [input] + options.tweaks
             + [options.elleKitFramework].compactMap { $0 }

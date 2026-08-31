@@ -452,6 +452,10 @@ struct IpaWorkbenchTab: View {
                     .foregroundStyle(.orange)
                 }
 
+                Toggle(L("workbench.recipe.rewriteJailbreakDeps"), isOn: Binding(
+                    get: { controller.recipe.rewriteJailbreakDependencies },
+                    set: { controller.recipe.rewriteJailbreakDependencies = $0 }
+                ))
                 Text(L("workbench.recipe.jailbreakDeps.note"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1016,32 +1020,38 @@ struct IpaWorkbenchTab: View {
         }
     }
 
-    /// 未确认依赖:第二期把「乐观当系统库」改成如实的「未确认」,这里必须把它显示出来,
-    /// 明确告诉用户「本机无法确认,需在已授权设备上验证」,而不是吞掉。
+    /// 未确认依赖保留数量摘要,避免把「本机无法确认」静默吞掉;逐条证据默认折叠,
+    /// 由需要排查的用户主动展开,避免几十条依赖把结果区撑得过长。
     @ViewBuilder
     private var unconfirmedDependenciesView: some View {
         if let deps = controller.executionResult?.audit.unconfirmedDependencies, !deps.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(L("workbench.result.unconfirmed.note"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(deps, id: \.self) { dep in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(dep.fileName).font(.footnote.weight(.medium))
+                            Text(L("workbench.result.unconfirmed.installPath", dep.installPath))
+                                .font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+                            Text(L("workbench.result.unconfirmed.referencedBy", dep.referencedBy))
+                                .font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+                            Text(L("workbench.result.unconfirmed.classification",
+                                   classificationLabel(dep.classification)))
+                                .font(.caption2).foregroundStyle(.secondary)
+                            Text(L("workbench.result.unconfirmed.evidence", dep.evidence))
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .insetSurfaceBackground(RoundedRectangle(cornerRadius: 8), legacyFill: .orange.opacity(0.08))
+                    }
+                }
+                .padding(.top, 4)
+            } label: {
                 Label(L("workbench.result.unconfirmed.title", deps.count), systemImage: "questionmark.circle")
                     .font(.subheadline.weight(.medium)).foregroundStyle(.orange)
-                Text(L("workbench.result.unconfirmed.note")).font(.caption).foregroundStyle(.secondary)
-                ForEach(deps, id: \.self) { dep in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(dep.fileName).font(.footnote.weight(.medium))
-                        Text(L("workbench.result.unconfirmed.installPath", dep.installPath))
-                            .font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
-                        Text(L("workbench.result.unconfirmed.referencedBy", dep.referencedBy))
-                            .font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
-                        Text(L("workbench.result.unconfirmed.classification",
-                               classificationLabel(dep.classification)))
-                            .font(.caption2).foregroundStyle(.secondary)
-                        Text(L("workbench.result.unconfirmed.evidence", dep.evidence))
-                            .font(.caption2).foregroundStyle(.secondary)
-                    }
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .insetSurfaceBackground(RoundedRectangle(cornerRadius: 8), legacyFill: .orange.opacity(0.08))
-                }
             }
         }
     }

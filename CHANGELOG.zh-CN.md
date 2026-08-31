@@ -4,6 +4,12 @@
 
 ## [未发布]
 
+## [1.0.2] - 2026-08-31
+
+- IPA 注入「自动修改越狱依赖」功能优化
+- 修复直接导入抖音 IPA 提取头文件时进程文件处理错误
+- 优化页面 UI，改善用户体验
+
 ## [1.0.1] - 2026-08-29
 
 `v1.0.0-beta.4` 之后的首个正式版。ad-hoc 签名，未经苹果公证。
@@ -21,4 +27,5 @@
 
 更早的测试版说明见 [英文 Changelog](CHANGELOG.md)。
 
+[1.0.2]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.2
 [1.0.1]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.1

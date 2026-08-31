@@ -146,7 +146,7 @@ private extension CharacterSet {
 /// - `swift run` / Xcode 直接跑 SwiftPM 可执行文件:没有 Info.plist,走 `fallbackVersion`。
 public enum AppVersionSource {
     /// 必须与仓库根目录 `Resources/AppVersion.txt` 一致,`UpdateServiceTests` 会校验两者不漂移。
-    public static let fallbackVersion = "1.0.1"
+    public static let fallbackVersion = "1.0.2"
 
     /// 纯函数形式,方便测试。传入解析不了的内容一律回退,保证任何启动方式都拿得到可比较的版本号。
     public static func resolve(infoDictionaryVersion: String?) -> String {
@@ -176,12 +176,13 @@ public struct GitHubRelease: Decodable, Equatable, Sendable {
     public let publishedAt: String?
     public let prerelease: Bool
     public let draft: Bool
+    public let assets: [GitHubReleaseAsset]
 
     private enum CodingKeys: String, CodingKey {
         case tagName = "tag_name"
         case htmlURL = "html_url"
         case publishedAt = "published_at"
-        case name, body, prerelease, draft
+        case name, body, prerelease, draft, assets
     }
 
     public init(from decoder: Decoder) throws {
@@ -194,11 +195,55 @@ public struct GitHubRelease: Decodable, Equatable, Sendable {
         // 缺字段时按「正式发布」处理,后续的 tag 比较仍然会拦住不合理的版本号。
         prerelease = try container.decodeIfPresent(Bool.self, forKey: .prerelease) ?? false
         draft = try container.decodeIfPresent(Bool.self, forKey: .draft) ?? false
+        assets = try container.decodeIfPresent([GitHubReleaseAsset].self, forKey: .assets) ?? []
     }
 
     public var publishedDate: Date? {
         guard let publishedAt else { return nil }
         return ISO8601DateFormatter().date(from: publishedAt)
+    }
+}
+
+/// GitHub release 附件。只取挑安装包需要的字段。
+public struct GitHubReleaseAsset: Decodable, Equatable, Sendable {
+    public let name: String
+    public let browserDownloadURL: URL
+
+    public init(name: String, browserDownloadURL: URL) {
+        self.name = name
+        self.browserDownloadURL = browserDownloadURL
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case browserDownloadURL = "browser_download_url"
+    }
+}
+
+/// 从 release 附件里挑可下载的 zip / dmg,并校验必须来自本仓库的 releases/download。
+public enum ReleaseDownload {
+    public static func preferredAssetURL(in assets: [GitHubReleaseAsset]) -> URL? {
+        let names = ["mac小助手", "macassistant"]
+        if let zip = first(assets, suffix: ".zip", names: names) { return zip }
+        if let dmg = first(assets, suffix: ".dmg", names: names) { return dmg }
+        if let zip = assets.first(where: { $0.name.lowercased().hasSuffix(".zip") }) {
+            return zip.browserDownloadURL
+        }
+        return assets.first(where: { $0.name.lowercased().hasSuffix(".dmg") })?.browserDownloadURL
+    }
+
+    public static func isTrusted(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https" else { return false }
+        guard url.host?.lowercased() == "github.com" else { return false }
+        let prefix = "/\(ProductLinks.Repository.owner)/\(ProductLinks.Repository.name)/releases/download/"
+        return url.path.hasPrefix(prefix)
+    }
+
+    private static func first(_ assets: [GitHubReleaseAsset], suffix: String, names: [String]) -> URL? {
+        assets.first { asset in
+            let name = asset.name.lowercased()
+            return name.hasSuffix(suffix) && names.contains(where: name.contains)
+        }?.browserDownloadURL
     }
 }
 
@@ -212,6 +257,8 @@ public struct UpdateInfo: Equatable, Sendable {
     public let title: String
     public let releaseNotes: String
     public let publishedAt: Date?
+    /// 仓库里挑出的 zip / dmg。没有附件时为 nil,弹窗退回打开 Release 页。
+    public let downloadURL: URL?
 
     public init(
         version: String,
@@ -219,7 +266,8 @@ public struct UpdateInfo: Equatable, Sendable {
         releaseURL: URL,
         title: String,
         releaseNotes: String,
-        publishedAt: Date?
+        publishedAt: Date?,
+        downloadURL: URL? = nil
     ) {
         self.version = version
         self.tagName = tagName
@@ -227,6 +275,7 @@ public struct UpdateInfo: Equatable, Sendable {
         self.title = title
         self.releaseNotes = releaseNotes
         self.publishedAt = publishedAt
+        self.downloadURL = downloadURL
     }
 
     /// 弹窗里只放摘要:release body 可能很长,完整内容交给网页。
@@ -303,7 +352,7 @@ public enum ManualCheckResult: Equatable, Sendable {
     public var message: String {
         switch self {
         case .updateAvailable(let info):
-            return "发现新版本 \(info.version)，可前往 GitHub 查看。"
+            return "发现新版本 \(info.version)，可下载更新。"
         case .upToDate(let version):
             return "已是最新版本（\(version)）。"
         case .noRelease:
@@ -395,8 +444,8 @@ public struct UpdatePreferences {
 
 /// 向 GitHub 查询最新 release 并给出是否需要提示的结论。
 ///
-/// 只读版本号,不下载、不安装、不上传任何用户数据。当前 App 是 ad-hoc 签名的开发构建,
-/// 自动替换二进制不安全,所以这里只负责提示 + 跳转浏览器。
+/// 检查本身只读版本号。用户确认后,界面层才按 `UpdateInfo.downloadURL` 下载 zip / dmg,
+/// 不自动替换正在运行的 App。
 public struct UpdateService {
     /// 网络层抽象。默认走 `URLSession`,测试注入固定 fixture,单测不会真的联网。
     public typealias Transport = (URLRequest) async throws -> (Data, URLResponse)
@@ -479,7 +528,8 @@ public struct UpdateService {
                 releaseURL: release.htmlURL,
                 title: (title?.isEmpty == false ? title! : "版本 \(latest.canonical)"),
                 releaseNotes: notes,
-                publishedAt: release.publishedDate
+                publishedAt: release.publishedDate,
+                downloadURL: ReleaseDownload.preferredAssetURL(in: release.assets)
             )
         )
     }

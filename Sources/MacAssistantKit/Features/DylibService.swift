@@ -220,13 +220,20 @@ public enum DylibService {
 
     @discardableResult
     private static func changeLoadDependency(from old: String, to new: String, fileAt url: URL) throws -> CommandResult {
-        let result = try ExternalTool.installNameTool.run(["-change", old, new, url.path])
-        guard result.succeeded else { throw DylibError.commandFailed(result.combinedOutput) }
+        if ExternalTool.installNameTool.isAvailable {
+            if let result = try? ExternalTool.installNameTool.run(["-change", old, new, url.path]),
+               result.succeeded,
+               let paths = try? loadDependencyPaths(fileAt: url),
+               paths.contains(new), !paths.contains(old) {
+                return result
+            }
+        }
+        try DylibInjector.changeLoadCommand(from: old, to: new, fileAt: url, stripCodeSignature: true)
         let paths = try loadDependencyPaths(fileAt: url)
         guard paths.contains(new), !paths.contains(old) else {
             throw DylibError.noExpectedChange(L("dylib.error.dependencyUnchanged", old, new))
         }
-        return result
+        return CommandResult(exitCode: 0, stdout: "DylibInjector.changeLoadCommand", stderr: "")
     }
 
     @discardableResult
@@ -237,6 +244,26 @@ public enum DylibService {
             throw DylibError.noExpectedChange(L("dylib.error.rpathNotAdded", path))
         }
         return result
+    }
+
+    /// 已有则跳过；`install_name_tool` 失败时用注入器补 `LC_RPATH`。
+    @discardableResult
+    public static func ensureRPath(_ path: String, fileAt url: URL) throws -> CommandResult {
+        if try rpaths(fileAt: url).contains(path) {
+            return CommandResult(exitCode: 0, stdout: "", stderr: "")
+        }
+        if ExternalTool.installNameTool.isAvailable {
+            do {
+                return try addRPath(path, fileAt: url)
+            } catch {
+                // 头部 padding 不够或路径已存在时走注入器。
+            }
+        }
+        try DylibInjector.addRPath(path, fileAt: url, stripCodeSignature: true)
+        guard try rpaths(fileAt: url).contains(path) else {
+            throw DylibError.noExpectedChange(L("dylib.error.rpathNotAdded", path))
+        }
+        return CommandResult(exitCode: 0, stdout: "DylibInjector.addRPath", stderr: "")
     }
 
     @discardableResult

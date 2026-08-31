@@ -220,6 +220,10 @@ final class ClassDumpTests: XCTestCase {
         XCTAssertTrue(result.classNames.contains("FixtureClass"), result.headers)
         XCTAssertTrue(result.headers.contains("FixtureProtocol"), result.headers)
         XCTAssertTrue(result.headers.contains("@property"), result.headers)
+        XCTAssertTrue(result.headers.contains("classdump"), result.headers)
+        XCTAssertTrue(result.headers.contains("https://github.com/iosrxwy/MacAssistant"), result.headers)
+        XCTAssertFalse(result.headers.contains("尽力而为"), result.headers)
+        XCTAssertFalse(result.headers.contains("best effort"), result.headers)
     }
 
     func testExternalClassDumpReadsGeneratedHeaderFiles() throws {
@@ -255,6 +259,65 @@ final class ClassDumpTests: XCTestCase {
         XCTAssertTrue(result.headers.contains("@interface ExternalFixture"), result.headers)
         XCTAssertTrue(result.classNames.contains("ExternalFixture"))
         XCTAssertTrue(result.classHeaders.contains { $0.name == "ExternalFixture" })
+    }
+
+    func testIPAResolutionPrefersLargestAppProcessMachO() throws {
+        guard ExternalTool.zip.isAvailable, ExternalTool.unzip.isAvailable else {
+            throw XCTSkip("缺少 zip/unzip")
+        }
+        let root = try FileSystemHelper.makeTemporaryDirectory(prefix: "classdump-largest-macho")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let archiveRoot = root.appendingPathComponent("archive")
+        let app = archiveRoot.appendingPathComponent("Payload/Demo.app")
+        let framework = app.appendingPathComponent("Frameworks/DemoCore.framework")
+        try FileManager.default.createDirectory(at: framework, withIntermediateDirectories: true)
+
+        let plist: [String: Any] = [
+            "CFBundleExecutable": "Demo",
+            "CFBundleIdentifier": "com.example.demo"
+        ]
+        let plistData = try PropertyListSerialization.data(
+            fromPropertyList: plist,
+            format: .xml,
+            options: 0
+        )
+        try plistData.write(to: app.appendingPathComponent("Info.plist"))
+
+        // 64-bit little-endian Mach-O magic. The framework deliberately dwarfs the launcher.
+        let machOMagic = Data([0xcf, 0xfa, 0xed, 0xfe])
+        try (machOMagic + Data(repeating: 0, count: 28))
+            .write(to: app.appendingPathComponent("Demo"))
+        try (machOMagic + Data(repeating: 0, count: 4_092))
+            .write(to: framework.appendingPathComponent("DemoCore"))
+
+        let ipa = root.appendingPathComponent("Demo.ipa")
+        let zipped = try ExternalTool.zip.run(
+            ["-qry", ipa.path, "Payload"],
+            currentDirectory: archiveRoot
+        )
+        XCTAssertTrue(zipped.succeeded, zipped.combinedOutput)
+
+        let resolved = try ClassDumpService.resolveBinary(from: ipa)
+        defer { if let cleanup = resolved.cleanup { try? FileManager.default.removeItem(at: cleanup) } }
+        XCTAssertEqual(resolved.binary.lastPathComponent, "DemoCore")
+        XCTAssertTrue(resolved.binary.path.contains("Frameworks/DemoCore.framework"))
+    }
+
+    @MainActor
+    func testSessionRetainsResultsWithoutAView() {
+        let session = ClassDumpSession()
+        session.inputURLs = [URL(fileURLWithPath: "/tmp/Demo.dylib")]
+        session.log = "导出完成\n目录：/tmp/Demo-Headers"
+        session.headers = "@interface Demo\n@end\n"
+        session.ok = true
+
+        // View 被侧栏/tab switch 拆掉后，只保留控制器引用，结果必须还在。
+        XCTAssertTrue(session.hasPersistedResult)
+        XCTAssertEqual(session.log, "导出完成\n目录：/tmp/Demo-Headers")
+        XCTAssertTrue(session.headers.contains("@interface Demo"))
+        XCTAssertEqual(session.ok, true)
+        XCTAssertEqual(session.inputURLs.map(\.lastPathComponent), ["Demo.dylib"])
     }
 
     func testRealIPAClassDumpWhenFixturePathIsProvided() throws {

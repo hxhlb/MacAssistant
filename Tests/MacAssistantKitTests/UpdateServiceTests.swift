@@ -303,6 +303,60 @@ final class UpdateServiceTests: XCTestCase {
             release.publishedDate,
             ISO8601DateFormatter().date(from: "2026-08-10T09:20:41Z")
         )
+        XCTAssertEqual(release.assets.count, 1)
+        XCTAssertEqual(release.assets[0].name, "MacAssistant.dmg")
+        XCTAssertEqual(
+            release.assets[0].browserDownloadURL.absoluteString,
+            "https://github.com/iosrxwy/MacAssistant/releases/download/v1.2.0/MacAssistant.dmg"
+        )
+
+        guard case .updateAvailable(let info) =
+                UpdateService.evaluate(release: release, currentVersion: "1.0.0") else {
+            return XCTFail("应当判定为有更新")
+        }
+        XCTAssertEqual(
+            info.downloadURL?.absoluteString,
+            "https://github.com/iosrxwy/MacAssistant/releases/download/v1.2.0/MacAssistant.dmg"
+        )
+    }
+
+    func testPrefersNamedZipOverDmg() {
+        let assets = [
+            GitHubReleaseAsset(
+                name: "notes.txt",
+                browserDownloadURL: URL(string: "https://github.com/iosrxwy/MacAssistant/releases/download/v1.2.0/notes.txt")!
+            ),
+            GitHubReleaseAsset(
+                name: "MacAssistant.dmg",
+                browserDownloadURL: URL(string: "https://github.com/iosrxwy/MacAssistant/releases/download/v1.2.0/MacAssistant.dmg")!
+            ),
+            GitHubReleaseAsset(
+                name: "Mac小助手-1.2.0.zip",
+                browserDownloadURL: URL(string: "https://github.com/iosrxwy/MacAssistant/releases/download/v1.2.0/Mac小助手-1.2.0.zip")!
+            ),
+        ]
+        XCTAssertEqual(
+            ReleaseDownload.preferredAssetURL(in: assets)?.lastPathComponent,
+            "Mac小助手-1.2.0.zip"
+        )
+    }
+
+    func testRejectsDownloadURLsOutsideThisRepository() {
+        XCTAssertTrue(
+            ReleaseDownload.isTrusted(
+                URL(string: "https://github.com/iosrxwy/MacAssistant/releases/download/v1.2.0/MacAssistant.dmg")!
+            )
+        )
+        XCTAssertFalse(
+            ReleaseDownload.isTrusted(
+                URL(string: "https://evil.example/MacAssistant.dmg")!
+            )
+        )
+        XCTAssertFalse(
+            ReleaseDownload.isTrusted(
+                URL(string: "https://github.com/other/repo/releases/download/v1/a.zip")!
+            )
+        )
     }
 
     func testDecodesReleaseWithNullNameAndBody() throws {
@@ -719,7 +773,7 @@ final class UpdateServiceTests: XCTestCase {
             return XCTFail("手动检查应当如实报告有新版本")
         }
         XCTAssertEqual(info.version, "1.2.0")
-        XCTAssertEqual(result.message, "发现新版本 1.2.0，可前往 GitHub 查看。")
+        XCTAssertEqual(result.message, "发现新版本 1.2.0，可下载更新。")
     }
 
     func testManualCheckUpToDateMessage() async {
