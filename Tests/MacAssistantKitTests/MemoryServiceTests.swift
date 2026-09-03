@@ -96,6 +96,22 @@ final class MemoryServiceTests: XCTestCase {
         XCTAssertNotEqual(snapshot.usedPercent, 100 - (snapshot.pressureFreePercent ?? 0))
     }
 
+    func testHostVMStatisticsFeedsUsedBytesWithoutShell() throws {
+        let stats = try XCTUnwrap(MemoryService.hostVMStatistics())
+        XCTAssertGreaterThan(stats.pageSize, 0)
+        let used = MemoryService.usedBytes(pages: stats.pages, pageSize: stats.pageSize)
+        XCTAssertGreaterThan(used, 0)
+        XCTAssertLessThanOrEqual(used, ProcessInfo.processInfo.physicalMemory)
+        XCTAssertGreaterThanOrEqual(MemoryService.swapUsedBytes(), 0)
+    }
+
+    func testMemorySnapshotUsesHostStatistics() throws {
+        let snapshot = try MemoryService.snapshot()
+        XCTAssertGreaterThan(snapshot.physical, 0)
+        XCTAssertLessThanOrEqual(snapshot.used, snapshot.physical)
+        XCTAssertGreaterThan(snapshot.used, 0)
+    }
+
     func testMemoryStatusPressureLevelIsReadable() {
         let level = MemoryService.memoryStatusPressureLevel()
         XCTAssertNotNil(level)

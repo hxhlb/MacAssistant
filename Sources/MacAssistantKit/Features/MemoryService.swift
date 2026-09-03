@@ -275,16 +275,13 @@ public enum MemoryService {
     ]
 
     public static func snapshot() throws -> MemorySnapshot {
-        let vm = try Shell.run("/usr/bin/vm_stat")
-        guard vm.succeeded else { throw MemoryServiceError.commandFailed(vm.combinedOutput) }
-        let parsed = parseVMStat(vm.stdout)
+        guard let parsed = hostVMStatistics() else {
+            throw MemoryServiceError.commandFailed("host_statistics64")
+        }
 
         let physical = ProcessInfo.processInfo.physicalMemory
         let pageSize = parsed.pageSize
         let compressedPages = parsed.pages["Pages occupied by compressor"] ?? 0
-
-        let swapResult = try? Shell.run("/usr/sbin/sysctl", ["-n", "vm.swapusage"])
-        let swapUsed = parseSwapUsage(swapResult?.stdout ?? "")
         let statusLevel = memoryStatusPressureLevel()
 
         return MemorySnapshot(
@@ -292,10 +289,46 @@ public enum MemoryService {
             used: min(physical, usedBytes(pages: parsed.pages, pageSize: pageSize)),
             cached: cachedFilesBytes(pages: parsed.pages, pageSize: pageSize),
             compressed: compressedPages * pageSize,
-            swapUsed: swapUsed,
+            swapUsed: swapUsedBytes(),
             pressureFreePercent: nil,
             pressureLevel: pressureLevel(statusLevel: statusLevel)
         )
+    }
+
+    /// `host_statistics64` 直读，键名与 `vm_stat` 一致，给 `usedBytes` 复用。
+    /// 仪表盘启动绝不能再走 `Shell.run`：`waitUntilExit` 会在主线程重入 runloop。
+    public static func hostVMStatistics() -> (pageSize: UInt64, pages: [String: UInt64])? {
+        var info = vm_statistics64()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<vm_statistics64_data_t>.stride / MemoryLayout<integer_t>.stride
+        )
+        let kr = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { rebound in
+                host_statistics64(mach_host_self(), HOST_VM_INFO64, rebound, &count)
+            }
+        }
+        guard kr == KERN_SUCCESS else { return nil }
+        let pageSize = UInt64(vm_page_size)
+        let pages: [String: UInt64] = [
+            "Pages free": UInt64(info.free_count),
+            "Pages active": UInt64(info.active_count),
+            "Pages inactive": UInt64(info.inactive_count),
+            "Pages speculative": UInt64(info.speculative_count),
+            "Pages wired down": UInt64(info.wire_count),
+            "Pages purgeable": UInt64(info.purgeable_count),
+            "File-backed pages": UInt64(info.external_page_count),
+            "Anonymous pages": UInt64(info.internal_page_count),
+            "Pages occupied by compressor": UInt64(info.compressor_page_count)
+        ]
+        return (pageSize, pages)
+    }
+
+    /// `vm.swapusage` 的二进制结构，避免再 spawn `sysctl`。
+    public static func swapUsedBytes() -> UInt64 {
+        var usage = XSWUsage()
+        var size = MemoryLayout<XSWUsage>.size
+        let status = sysctlbyname("vm.swapusage", &usage, &size, nil, 0)
+        return status == 0 ? usage.used : 0
     }
 
     /// 活动监视器口径的“已用内存”：App 匿名内存（扣除可随时回收的 purgeable）+ 联动 + 压缩。
@@ -491,4 +524,13 @@ public enum MemoryService {
         }
         return UInt64(max(0, number * multiplier))
     }
+}
+
+/// `sys/sysctl.h` 的 `xsw_usage`，Darwin 模块不一定导出这个结构体。
+private struct XSWUsage {
+    var total: UInt64 = 0
+    var avail: UInt64 = 0
+    var used: UInt64 = 0
+    var pagesize: UInt32 = 0
+    var encrypted: Int32 = 0
 }

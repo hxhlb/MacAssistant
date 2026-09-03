@@ -515,7 +515,6 @@
 "tweak.error.architectureMismatchDetail" = "%@ 未覆盖主程序切片 %@；tweak=%@，主程序=%@";
 "tweak.error.unresolvedDependency" = "依赖未满足：%@";
 "tweak.error.outputExists" = "输出已存在，拒绝覆盖：%@";
-"tweak.error.deviceLevelPackage" = "%@ 是设备级包，不适合作为 IPA 内插件注入：\n%@";
 "tweak.error.rewriteFailed" = "改写 %@ → %@ 失败：%@";
 "tweak.error.missingSubstrateFramework" = "%@ 依赖 CydiaSubstrate，但未提供兼容的 CydiaSubstrate.framework";
 "tweak.error.missingInstallNameTool" = "缺少 install_name_tool，无法添加必需 rpath";
@@ -571,8 +570,8 @@
 "dylib.macho.unsupported.fatSliceOverflow" = "fat 切片偏移或长度溢出";
 "dylib.macho.unsupported.fatSliceOverlap" = "fat 切片范围重叠";
 "dylib.macho.unsupported.changeMissing" = "找不到要改写的 load command：%@";
-"ipaflow.log.substrateStubCopied" = "已将内置 libsubstrate stub 放入 Frameworks（不注入主程序）";
-"ipaflow.log.substrateStubWarning" = "内置 stub 依赖 libstdc++，iOS 17+ 请优先使用包内或 ElleKit 的 CydiaSubstrate.framework";
+"ipaflow.log.substrateStubCopied" = "已放入兼容库";
+"ipaflow.log.substrateStubWarning" = "新系统上若插件打不开，再换兼容库即可";
 "ipaflow.error.missingSubstrateStub" = "需要内置 libsubstrate.dylib，但资源缺失";
 "dylib.macho.log.skippedExisting" = "已跳过现有 load command：%@";
 "dylib.macho.log.replacedWithWeak" = "已把切片 %d 的现有命令替换为弱引用：%@";

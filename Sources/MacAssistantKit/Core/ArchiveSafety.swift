@@ -104,25 +104,24 @@ public enum ArchiveSafety {
         guard UInt64(data.count) <= limits.maxArchiveBytes else {
             throw ArchiveSafetyError.totalSizeLimit(UInt64(data.count))
         }
-        let bytes = [UInt8](data)
-        guard bytes.count >= 22 else { throw ArchiveSafetyError.malformed(L("archive.malformed.missingEndRecord")) }
-        let searchStart = max(0, bytes.count - 22 - 65_535)
+        guard data.count >= 22 else { throw ArchiveSafetyError.malformed(L("archive.malformed.missingEndRecord")) }
+        let searchStart = max(0, data.count - 22 - 65_535)
         var eocd: Int?
-        var cursor = bytes.count - 22
+        var cursor = data.count - 22
         while cursor >= searchStart {
-            if readU32(bytes, cursor) == 0x0605_4b50 {
+            if readU32(data, cursor) == 0x0605_4b50 {
                 eocd = cursor
                 break
             }
             cursor -= 1
         }
         guard let eocd else { throw ArchiveSafetyError.malformed(L("archive.malformed.noCentralDirectory")) }
-        let entries = Int(readU16(bytes, eocd + 10))
-        let centralSize = Int(readU32(bytes, eocd + 12))
-        let centralOffset = Int(readU32(bytes, eocd + 16))
+        let entries = Int(readU16(data, eocd + 10))
+        let centralSize = Int(readU32(data, eocd + 12))
+        let centralOffset = Int(readU32(data, eocd + 16))
         guard entries <= limits.maxEntries else { throw ArchiveSafetyError.entryLimit(entries) }
-        guard centralOffset <= bytes.count,
-              centralSize <= bytes.count - centralOffset,
+        guard centralOffset <= data.count,
+              centralSize <= data.count - centralOffset,
               centralOffset + centralSize <= eocd
         else {
             throw ArchiveSafetyError.malformed(L("archive.malformed.centralDirectoryOutOfRange"))
@@ -131,23 +130,23 @@ public enum ArchiveSafety {
         var pointer = centralOffset
         var total: UInt64 = 0
         for _ in 0..<entries {
-            guard pointer <= bytes.count - 46, readU32(bytes, pointer) == 0x0201_4b50 else {
+            guard pointer <= data.count - 46, readU32(data, pointer) == 0x0201_4b50 else {
                 throw ArchiveSafetyError.malformed(L("archive.malformed.centralEntryTruncated"))
             }
-            let flags = readU16(bytes, pointer + 8)
+            let flags = readU16(data, pointer + 8)
             guard flags & 0x1 == 0 else { throw ArchiveSafetyError.malformed(L("archive.malformed.encryptedZIP")) }
-            let compressedSize = UInt64(readU32(bytes, pointer + 20))
-            let uncompressedSize = UInt64(readU32(bytes, pointer + 24))
-            let nameLength = Int(readU16(bytes, pointer + 28))
-            let extraLength = Int(readU16(bytes, pointer + 30))
-            let commentLength = Int(readU16(bytes, pointer + 32))
-            let externalAttributes = readU32(bytes, pointer + 38)
-            let localOffset = Int(readU32(bytes, pointer + 42))
+            let compressedSize = UInt64(readU32(data, pointer + 20))
+            let uncompressedSize = UInt64(readU32(data, pointer + 24))
+            let nameLength = Int(readU16(data, pointer + 28))
+            let extraLength = Int(readU16(data, pointer + 30))
+            let commentLength = Int(readU16(data, pointer + 32))
+            let externalAttributes = readU32(data, pointer + 38)
+            let localOffset = Int(readU32(data, pointer + 42))
             let recordLength = 46 + nameLength + extraLength + commentLength
-            guard nameLength > 0, recordLength <= bytes.count - pointer else {
+            guard nameLength > 0, recordLength <= data.count - pointer else {
                 throw ArchiveSafetyError.malformed(L("archive.malformed.nameOrExtraOutOfRange"))
             }
-            let nameData = Data(bytes[(pointer + 46)..<(pointer + 46 + nameLength)])
+            let nameData = data.subdata(in: (pointer + 46)..<(pointer + 46 + nameLength))
             guard let name = String(data: nameData, encoding: .utf8) else {
                 throw ArchiveSafetyError.malformed(L("archive.malformed.nameNotUTF8"))
             }
@@ -165,8 +164,8 @@ public enum ArchiveSafety {
             total += uncompressedSize
             guard total <= limits.maxTotalBytes else { throw ArchiveSafetyError.totalSizeLimit(total) }
             guard compressedSize <= limits.maxArchiveBytes,
-                  localOffset <= bytes.count - 30,
-                  readU32(bytes, localOffset) == 0x0403_4b50
+                  localOffset <= data.count - 30,
+                  readU32(data, localOffset) == 0x0403_4b50
             else {
                 throw ArchiveSafetyError.malformed(L("archive.malformed.localEntryOutOfRange"))
             }
@@ -189,14 +188,14 @@ public enum ArchiveSafety {
         return try validateZIP(Data(contentsOf: url, options: .mappedIfSafe), limits: limits)
     }
 
-    private static func readU16(_ bytes: [UInt8], _ offset: Int) -> UInt16 {
-        UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8)
+    private static func readU16(_ data: Data, _ offset: Int) -> UInt16 {
+        UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
     }
 
-    private static func readU32(_ bytes: [UInt8], _ offset: Int) -> UInt32 {
-        UInt32(bytes[offset])
-            | (UInt32(bytes[offset + 1]) << 8)
-            | (UInt32(bytes[offset + 2]) << 16)
-            | (UInt32(bytes[offset + 3]) << 24)
+    private static func readU32(_ data: Data, _ offset: Int) -> UInt32 {
+        UInt32(data[offset])
+            | (UInt32(data[offset + 1]) << 8)
+            | (UInt32(data[offset + 2]) << 16)
+            | (UInt32(data[offset + 3]) << 24)
     }
 }

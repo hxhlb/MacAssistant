@@ -29,13 +29,6 @@ public struct WorkbenchPlugin: Identifiable, Sendable {
     }
 }
 
-/// 一个被判定为「不适合当 IPA 内插件」的 .deb 及其原因。
-public struct BlockedWorkbenchDeb: Identifiable, Sendable {
-    public let id = UUID()
-    public let name: String
-    public let factors: [DebPluginBlockFactor]
-}
-
 /// 拖入式 IPA 工作台的状态机与编排器。判断逻辑委托给 Kit 层的纯函数
 /// (`WorkspaceInputClassifier` / `WorkspaceSigningPlanner` / `WorkbenchTweakEvaluator` /
 /// `WorkspacePlanAssembler`),这里只负责持有状态、分桶输入,并把三态串起来。
@@ -53,7 +46,6 @@ public final class IpaWorkbenchController: ObservableObject {
     @Published public var pendingCertificateURL: URL?
     /// 工作台 p12 明文密码。默认 `1`，用户可改。
     @Published public var developerCertificatePassword = SigningService.defaultDeveloperCertificatePassword
-    @Published public private(set) var blockedDebs: [BlockedWorkbenchDeb] = []
     @Published public private(set) var unrecognized: [URL] = []
 
     /// 被用户关掉的插件。未列入的一律注入——工作台默认全注入。
@@ -208,27 +200,19 @@ public final class IpaWorkbenchController: ObservableObject {
         recipe.metadata.shortVersion = nil
         recipe.metadata.buildVersion = nil
         recipe.metadata.minimumOSVersion = nil
-        recipe.metadata.repairWhiteIcon = false
     }
 
-    // MARK: - DEB 摄取(工作项 1:适格性阻止)
+    // MARK: - DEB 摄取
 
-    /// 扫描并摄取一个 .deb。设备级包(daemon / 命令行工具 / setuid / 内核级)默认阻止,
-    /// 列出原因,不静默抽 dylib。适格的包保留全部候选(带 filter),默认全部注入。
+    /// 扫描并摄取一个 .deb：抽出全部 tweak dylib，默认全部注入。
+    /// 维护脚本 / daemon 等特征只作分类，不拦截。
     public func ingestDeb(_ url: URL) throws {
         let session = try TweakInjectService.candidateSession(inDebAt: url)
         attachDeb(session: session, sourceName: url.lastPathComponent)
     }
 
-    /// 登记后台扫描好的 .deb 会话。设备级包默认阻止并列出原因,不静默抽 dylib。
+    /// 登记后台扫描好的 .deb 会话，把包内 dylib 全部加入插件列表。
     public func attachDeb(session: DebTweakCandidateSession, sourceName: String) {
-        guard session.pluginEligibility.isEligibleAsIpaPlugin else {
-            let blocked = BlockedWorkbenchDeb(name: sourceName, factors: session.pluginEligibility.factors)
-            if !blockedDebs.contains(where: { $0.name == blocked.name }) {
-                blockedDebs.append(blocked)
-            }
-            return
-        }
         candidateSessions.append(session)
         for candidate in session.candidates {
             plugins.append(WorkbenchPlugin(
@@ -368,20 +352,11 @@ public final class IpaWorkbenchController: ObservableObject {
         phase = .preflighted
     }
 
-    /// 一份汇总的阻止/告警清单:预检 findings + 主 tweak filter 比对 + 被阻止 DEB 的适格性原因。
+    /// 一份汇总的阻止/告警清单:预检 findings + 主 tweak filter 比对。
     /// 用户应在一处看到所有原因,而不是散落在各卡片或点了执行才被抛错拦住。
     public var combinedPreflightFindings: [IpaPreflightFinding] {
         var findings = preflightReport?.findings ?? []
         for item in pluginChoices { findings += item.choice.evaluation.findings }
-        for deb in blockedDebs {
-            findings += deb.factors.map {
-                IpaPreflightFinding(
-                    severity: .blocker,
-                    code: "deb.plugin.\($0.reason.rawValue)",
-                    message: "\(deb.name): \($0.explanation)"
-                )
-            }
-        }
         return findings
     }
 
@@ -449,7 +424,7 @@ public final class IpaWorkbenchController: ObservableObject {
             inputName: snapshot?.originalURL.lastPathComponent ?? "",
             inputSHA256: snapshot?.sha256 ?? "",
             outputName: result.outputURL.lastPathComponent,
-            outputSHA256: (try? DylibService.sha256(fileAt: result.outputURL)),
+            outputSHA256: nil,
             pluginHashes: pluginHashes,
             targetProfileBundleIDs: requiredProfileBundleIDs,
             finalInjectedDylibPosition: WorkspacePlanAssembler.finalDylibPosition(from: result),
@@ -497,7 +472,6 @@ public final class IpaWorkbenchController: ObservableObject {
         provisioningProfiles = []
         pendingCertificateURL = nil
         developerCertificatePassword = SigningService.defaultDeveloperCertificatePassword
-        blockedDebs = []
         unrecognized = []
         disabledPluginIDs = []
         acknowledgedFilterMismatch = false

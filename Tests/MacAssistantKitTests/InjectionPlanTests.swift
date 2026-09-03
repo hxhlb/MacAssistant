@@ -509,11 +509,8 @@ final class InjectionPlanTests: XCTestCase {
         XCTAssertFalse(off.enableFileSharing)
     }
 
-    func testWorkbenchDefaultsFillMinimumOSOnlyWhenMissing() {
-        XCTAssertEqual(
-            InjectionMetadataChanges().resolvingWorkbenchDefaults().minimumOSVersion,
-            InjectionMetadataChanges.defaultMinimumOSVersion
-        )
+    func testWorkbenchDefaultsLeaveMinimumOSAloneUnlessSet() {
+        XCTAssertNil(InjectionMetadataChanges().resolvingWorkbenchDefaults().minimumOSVersion)
         XCTAssertEqual(
             InjectionMetadataChanges(minimumOSVersion: "16.0").resolvingWorkbenchDefaults().minimumOSVersion,
             "16.0"

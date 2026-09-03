@@ -4,6 +4,13 @@
 
 ## [未发布]
 
+## [1.0.3] - 2026-09-03
+
+- 修复 macOS 15.0–15.1 启动闪退：首页不再在主线程跑 `vm_stat`/`pmset`，页面骨架也不再在首帧 `scrollTo`。
+- 图标补上 squircle 透明边，并去掉没有 Asset Catalog 的 `CFBundleIconName`，Launchpad 不再显示白方块。
+- 带安装脚本的 DEB 会自动抽出插件并注入，不再拦截。
+- IPA 注入对齐 InjectIPA：只改插件依赖，不再误改系统库；默认删除 Watch/插件、开启文件共享并修复白图标；大包注入更快。
+
 ## [1.0.2] - 2026-08-31
 
 - IPA 注入「自动修改越狱依赖」功能优化
@@ -27,5 +34,6 @@
 
 更早的测试版说明见 [英文 Changelog](CHANGELOG.md)。
 
+[1.0.3]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.3
 [1.0.2]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.2
 [1.0.1]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.1

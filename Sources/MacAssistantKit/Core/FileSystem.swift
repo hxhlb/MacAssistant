@@ -1,3 +1,6 @@
+#if canImport(Darwin)
+import Darwin
+#endif
 import Foundation
 
 /// 文件系统相关的通用工具。
@@ -127,6 +130,14 @@ public enum FileSystemHelper {
             return url
         }
         return nil
+    }
+
+    /// APFS 上用 clonefile 做写时复制；失败再回退到整份拷贝。
+    public static func cloneOrCopyItem(at source: URL, to destination: URL) throws {
+        #if canImport(Darwin)
+        if clonefile(source.path, destination.path, 0) == 0 { return }
+        #endif
+        try FileManager.default.copyItem(at: source, to: destination)
     }
 
     /// 递归查找目录下所有满足条件的文件。

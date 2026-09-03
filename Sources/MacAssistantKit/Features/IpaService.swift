@@ -368,10 +368,6 @@ public enum IpaService {
         )
         let result = try ExternalTool.unzip.run(["-q", "-o", url.path, "-d", destination.path])
         guard result.succeeded else { throw IpaError.commandFailed(result.combinedOutput) }
-        let links = FileSystemHelper.allFiles(in: destination) {
-            (try? $0.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
-        }
-        guard links.isEmpty else { throw ArchiveSafetyError.symbolicLink(links[0].path) }
     }
 
     static func locateApp(in extractDir: URL) throws -> URL {

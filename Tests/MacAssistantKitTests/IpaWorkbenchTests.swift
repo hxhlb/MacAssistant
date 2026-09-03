@@ -794,6 +794,18 @@ final class IpaWorkbenchTests: XCTestCase {
     }
 
     @MainActor
+    func testNewWorkbenchMatchesInjectipaDefaults() {
+        let recipe = IpaWorkbenchController().recipe
+        XCTAssertEqual(recipe.components.watch, .remove)
+        XCTAssertEqual(recipe.components.plugIns, .remove)
+        XCTAssertEqual(recipe.components.appClips, .preserve)
+        XCTAssertTrue(recipe.components.destructiveRemovalConfirmed)
+        XCTAssertTrue(recipe.metadata.enableFileSharing)
+        XCTAssertTrue(recipe.metadata.repairWhiteIcon)
+        XCTAssertNil(recipe.metadata.minimumOSVersion)
+    }
+
+    @MainActor
     func testNewWorkbenchEnablesFileSharingByDefault() {
         XCTAssertTrue(IpaWorkbenchController().recipe.metadata.enableFileSharing)
         let controller = IpaWorkbenchController()
@@ -847,7 +859,7 @@ final class IpaWorkbenchTests: XCTestCase {
             recipe: recipe,
             signing: .none
         ))
-        XCTAssertEqual(defaulted.metadata.minimumOSVersion, InjectionMetadataChanges.defaultMinimumOSVersion)
+        XCTAssertNil(defaulted.metadata.minimumOSVersion)
         XCTAssertEqual(defaulted.metadata.bundleID, "com.demo.multi")
 
         recipe.metadata.minimumOSVersion = "16.0"
@@ -933,5 +945,56 @@ final class IpaWorkbenchTests: XCTestCase {
         XCTAssertEqual(SigningService.resolvedDeveloperCertificatePassword(nil), "1")
         XCTAssertEqual(SigningService.resolvedDeveloperCertificatePassword("  "), "1")
         XCTAssertEqual(SigningService.resolvedDeveloperCertificatePassword("secret"), "secret")
+    }
+
+    @MainActor
+    func testIngestDebWithMaintainerScriptsExtractsDylibs() throws {
+        for tool in [ExternalTool.clang, .dpkgDeb] where !tool.isAvailable {
+            throw XCTSkip("缺少 \(tool.commandName)")
+        }
+        let root = try FileSystemHelper.makeTemporaryDirectory(prefix: "wb-deb-extract")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let source = root.appendingPathComponent("tweak.c")
+        try "int tweak_entry(void) { return 0; }\n".write(to: source, atomically: true, encoding: .utf8)
+        let dylib = root.appendingPathComponent("ThemePro.dylib")
+        XCTAssertTrue(try Shell.run(
+            ExternalTool.clang.path!,
+            ["-dynamiclib", "-o", dylib.path, source.path]
+        ).succeeded)
+
+        let deb = root.appendingPathComponent("ThemePro.deb")
+        _ = try DebService.build(
+            DebPackageRequest(
+                metadata: DebPackageMetadata(
+                    packageID: "com.example.themepro",
+                    name: "ThemePro",
+                    version: "4.9.6",
+                    architecture: "iphoneos-arm64",
+                    description: "fixture",
+                    maintainer: "Tester",
+                    author: "Tester",
+                    depends: "mobilesubstrate",
+                    section: "Tweaks"
+                ),
+                layout: .rootless,
+                dylibs: [dylib],
+                scripts: [
+                    .postinst: "#!/bin/sh\nexit 0\n",
+                    .postrm: "#!/bin/sh\nexit 0\n",
+                ]
+            ),
+            to: deb
+        )
+
+        let eligibility = try DebPluginEligibilityClassifier.classify(debAt: deb)
+        XCTAssertFalse(eligibility.isEligibleAsIpaPlugin)
+        XCTAssertTrue(eligibility.factors.contains { $0.reason == .maintainerScript })
+
+        let controller = IpaWorkbenchController()
+        try controller.ingestDeb(deb)
+        XCTAssertEqual(controller.plugins.count, 1)
+        XCTAssertEqual(controller.plugins[0].displayName, "ThemePro.dylib")
+        XCTAssertEqual(controller.plugins[0].sourceDebName, "ThemePro.deb")
     }
 }

@@ -4,6 +4,13 @@ All notable changes to MacAssistant are recorded here.
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-09-03
+
+- Fix a launch crash on macOS 15.0–15.1: dashboard no longer blocks the main thread with `vm_stat`/`pmset`, and FeatureScaffold no longer calls `scrollTo` during first layout.
+- Give the app icon a proper squircle alpha and drop `CFBundleIconName` without an asset catalog, so Launchpad no longer shows a white square.
+- DEB packages with maintainer scripts are extracted and injected instead of being blocked.
+- IPA injection now follows InjectIPA: rewrite jailbreak deps on plugins only and leave system libraries alone; remove Watch/PlugIns by default, enable file sharing, and repair the white icon. Large IPAs inject faster.
+
 ## [1.0.2] - 2026-08-31
 
 - Improve automatic jailbreak-dependency rewriting during IPA injection
@@ -112,6 +119,7 @@ First public prerelease.
 
 This prerelease is ad-hoc signed and not notarized. macOS may block the first launch. Open the app once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. Full steps: [README](README.md#first-launch-blocked-by-macos).
 
+[1.0.3]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.3
 [1.0.2]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.2
 [1.0.1]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.1
 [1.0.0-beta.4]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.0-beta.4

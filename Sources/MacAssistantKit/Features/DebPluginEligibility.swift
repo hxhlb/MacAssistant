@@ -1,9 +1,9 @@
 import Foundation
 
-/// 一个 .deb 之所以不适合当「IPA 内插件」的原因。
+/// 一个 .deb 带有「设备级 / 安装期」特征的原因。
 ///
-/// 这些特征说明包的性质是「装进越狱设备根文件系统」而非「随 App 沙盒一起加载」,
-/// 强行抽个 dylib 塞进 IPA 既不会按包作者意图运行,也可能把设备级行为带进用户不知情的 App。
+/// 这些特征说明包的性质更接近「装进越狱设备根文件系统」。注入流程仍会抽出 dylib,
+/// 分类结果只作诊断,不再拦截。
 public enum DebPluginBlockReason: String, Codable, Hashable, Sendable {
     /// 含 LaunchDaemons plist:随系统以 root 常驻,和 App 生命周期无关。
     case launchDaemon
@@ -38,8 +38,8 @@ public struct DebPluginBlockFactor: Identifiable, Codable, Hashable, Sendable {
 
 /// 一个 .deb 作为「IPA 内插件」的适用性结论。
 ///
-/// 注意:这是**可复用的分类结果**,不是硬错误。同一个包在「DEB 打包/转换」页面仍是合法输入;
-/// 只有当它被当作 IPA 内插件时,`isEligibleAsIpaPlugin == false` 才应阻止流程。
+/// 注意:这是**可复用的分类结果**,不是硬错误。IPA 注入会抽出 dylib 并继续;
+/// `isEligibleAsIpaPlugin == false` 不再拦截流程。
 public struct DebPluginEligibility: Codable, Hashable, Sendable {
     public let isEligibleAsIpaPlugin: Bool
     public let factors: [DebPluginBlockFactor]
@@ -49,7 +49,7 @@ public struct DebPluginEligibility: Codable, Hashable, Sendable {
         self.factors = factors
     }
 
-    /// 转成 preflight findings(不适用时为 blocker),便于并入现有预检报告。
+    /// 转成预检 findings。注入不再据此拦截,仅供诊断。
     public var findings: [IpaPreflightFinding] {
         factors.map {
             IpaPreflightFinding(

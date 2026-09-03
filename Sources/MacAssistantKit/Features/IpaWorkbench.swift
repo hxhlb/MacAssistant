@@ -6,13 +6,13 @@ import Foundation
 /// 一次拖入里,单个文件被自动归到的角色。
 ///
 /// 分类只看扩展名与是否目录这类**本机可确定的事实**;拿不准的一律 `.unrecognized`,
-/// 绝不猜。DEB 是否真能当插件由 `DebPluginEligibilityClassifier` 另行判定,这里只认「它是个 deb」。
+/// 绝不猜。这里只认「它是个 deb」，扫描后抽出 dylib。
 public enum WorkspaceInputRole: String, Codable, Hashable, Sendable {
     /// 目标 IPA。
     case ipa
     /// 目标 .app 目录。
     case app
-    /// 插件来源包,需先过适格性判定。
+    /// 插件来源包,扫描后抽出 dylib。
     case deb
     /// 直接提供的动态库。
     case dylib
@@ -434,7 +434,7 @@ public final class ImmutableSourceSnapshot: @unchecked Sendable {
         let root = try FileSystemHelper.makeTemporaryDirectory(prefix: "workspace-source")
         do {
             let snapshot = root.appendingPathComponent(originalURL.lastPathComponent)
-            try FileManager.default.copyItem(at: originalURL, to: snapshot)
+            try FileSystemHelper.cloneOrCopyItem(at: originalURL, to: snapshot)
             let isDirectory = FileSystemHelper.isDirectory(originalURL)
             let hash = isDirectory ? "" : (try? DylibService.sha256(fileAt: originalURL)) ?? ""
             if !isDirectory {
@@ -617,8 +617,8 @@ public struct InjectionRecipe: Codable, Hashable, Sendable, Identifiable {
         name: String,
         injectionOrder: [String] = [],
         targetMappings: [RecipeTargetMapping] = [],
-        components: InjectionComponentPolicy = .init(),
-        metadata: InjectionMetadataChanges = .init(),
+        components: InjectionComponentPolicy = .injectipaDefaults,
+        metadata: InjectionMetadataChanges = .init(repairWhiteIcon: true),
         stripCodeSignatureIfNeeded: Bool = true,
         leaveUnsigned: Bool = true,
         sideloadSigning: SideloadSigningChoice? = nil,

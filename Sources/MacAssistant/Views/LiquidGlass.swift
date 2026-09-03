@@ -98,6 +98,16 @@ extension View {
         modifier(FeatureSurfaceBackground())
     }
 
+    /// 打开页面时停在顶部。不用 `scrollTo`：旧系统上目标 id 未入图会直接断言。
+    @ViewBuilder
+    func defaultScrollAnchorTopIfAvailable() -> some View {
+        if #available(macOS 14.0, *) {
+            defaultScrollAnchor(.top)
+        } else {
+            self
+        }
+    }
+
     /// 滚动内容在工具栏/边缘处的渐隐。macOS 26 之前无对应行为。
     @ViewBuilder
     func softScrollEdgeEffect() -> some View {

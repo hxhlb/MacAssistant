@@ -41,6 +41,16 @@ final class TweakInjectServiceTests: XCTestCase {
     func testSystemLibNotRewritten() {
         XCTAssertNil(TweakInjectService.rewriteTarget(for: "/usr/lib/libSystem.B.dylib"))
         XCTAssertNil(TweakInjectService.rewriteTarget(for: "/usr/lib/libobjc.A.dylib"))
+        XCTAssertNil(
+            TweakInjectService.rewriteTarget(
+                for: "/System/Library/Frameworks/SystemConfiguration.framework/SystemConfiguration"
+            )
+        )
+        XCTAssertNil(
+            TweakInjectService.rewriteTarget(
+                for: "/System/Library/Frameworks/Foundation.framework/Foundation"
+            )
+        )
     }
 
     func testAlreadyRpathNotRewritten() {

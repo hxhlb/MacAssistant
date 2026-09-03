@@ -361,10 +361,6 @@ public enum IpaInjectionWorkflow {
         guard !preflight.hasBlockers else {
             throw IpaInjectionWorkflowError.preflight(preflight.findings)
         }
-        emit(L("ipaflow.log.preflightPassed", preflight.targets.count))
-
-        // 在任何改动之前先独立读一遍,作为 diff 的 before;after 稍后从修改后的暂存产物重读。
-        let beforeSnapshot = try snapshotMachO(in: app)
 
         let currentBundleID = ((try? IpaService.infoPlist(appBundle: app))?["CFBundleIdentifier"] as? String) ?? ""
         let metadata = plan.metadata.resolvingBundleID(current: currentBundleID)
@@ -372,30 +368,34 @@ public enum IpaInjectionWorkflow {
             emit(L("ipaflow.log.ppqBundleID", rewritten))
         }
 
-        try applyComponentPolicy(plan.components, to: app, emit: emit)
+        // 资源先落地，injectipa 也是先改包内文件再删组件。ElleKit 等框架必须在改依赖前就位。
         try applyResources(plan.resources, to: app, emit: emit)
-        try applyMetadata(metadata, to: app, emit: emit)
 
         let mainExecutable = try mainExecutable(in: app)
         let resolved = try plan.items.map {
             try resolve($0, app: app, mainExecutable: mainExecutable)
         }
-        try embedAndInject(
-            resolved,
-            stripCodeSignature: plan.stripCodeSignatureIfNeeded,
-            emit: emit
+        let beforeSnapshot = try snapshotMachO(
+            files: touchedMachOFiles(resolved: resolved, extras: []),
+            in: app,
+            detailed: false
         )
-        try rewriteJailbreakDependenciesIfNeeded(
+        // 与 injectipa 对齐：每个 dylib 拷贝 → 改依赖 → 注入，然后再删小组件 / 手表、改 plist。
+        let rewritten = try embedAndInject(
+            resolved,
             plan: plan,
             app: app,
             mainExecutable: mainExecutable,
+            stripCodeSignature: plan.stripCodeSignatureIfNeeded,
             emit: emit
         )
+        try applyComponentPolicy(plan.components, to: app, emit: emit)
+        try applyMetadata(metadata, to: app, emit: emit)
 
         var signingLog: [String] = []
         switch plan.signing {
         case .none:
-            emit(L("ipaflow.log.signingSkipped"))
+            break
         case .adHoc:
             _ = try SigningService.resignJailbreak(
                 app: app,
@@ -431,7 +431,6 @@ public enum IpaInjectionWorkflow {
         guard stagedAudit.passed else {
             throw IpaInjectionWorkflowError.auditFailed(stagedAudit.unresolvedDependencies.joined(separator: "\n"))
         }
-        emit(L("ipaflow.log.stagedAuditPassed"))
 
         let output = try outputDestination(plan: plan, override: outputURL)
         guard !FileManager.default.fileExists(atPath: output.path) else {
@@ -463,13 +462,16 @@ public enum IpaInjectionWorkflow {
             guard zip.succeeded else { throw IpaError.commandFailed(zip.combinedOutput) }
             emit(InjectionProgressLog.zipProgress(100))
             _ = try ArchiveSafety.validateZIP(at: temporary)
-            emit(L("ipaflow.log.archiveValidated"))
 
             // 暂存 App 已在压缩前逐切片审计;zip 成功后再校验中央目录和本地文件头即可。
             // 不再把刚生成的大型 IPA 全量解压第二遍——那会让「压缩完成」之后仍产生一轮
             // 与包体积等量的读写。after 仍从修改后的真实文件重读,不使用计划值。
             finalAudit = stagedAudit
-            afterSnapshot = try snapshotMachO(in: app)
+            afterSnapshot = try snapshotMachO(
+                files: touchedMachOFiles(resolved: resolved, extras: rewritten),
+                in: app,
+                detailed: false
+            )
             try FileManager.default.moveItem(at: temporary, to: output)
             emit(InjectionProgressLog.zipSucceeded(output.path))
         case .app:
@@ -480,11 +482,14 @@ public enum IpaInjectionWorkflow {
             guard finalAudit.passed else {
                 throw IpaInjectionWorkflowError.auditFailed(finalAudit.unresolvedDependencies.joined(separator: "\n"))
             }
-            afterSnapshot = try snapshotMachO(in: temporary)
+            afterSnapshot = try snapshotMachO(
+                files: touchedMachOFiles(resolved: resolved, extras: rewritten),
+                in: app,
+                detailed: false
+            )
             try FileManager.default.moveItem(at: temporary, to: output)
             emit(InjectionProgressLog.appPackaged(output.path))
         }
-        emit(L("ipaflow.log.finalAuditPassed"))
         clearWorkCache()
         return IpaInjectionExecutionResult(
             outputURL: output,
@@ -963,16 +968,49 @@ public enum IpaInjectionWorkflow {
             .lowercased()
     }
 
-    /// 按插件顺序:拷贝 → 如有可改写依赖则改写 → 注入。每步立刻回调,便于工作台逐步展示。
+    /// injectipa 顺序：拷贝 → 有越狱依赖就改 → 注入。
+    @discardableResult
     private static func embedAndInject(
         _ entries: [ResolvedInjection],
+        plan: ValidatedInjectionPlan,
+        app: URL,
+        mainExecutable: URL,
         stripCodeSignature: Bool,
         emit: (String) -> Void
-    ) throws {
+    ) throws -> [URL] {
         var published: [String: String] = [:]
+        var rewritten: [URL] = []
+        let mode = plan.rewriteJailbreakDependencies
+            ? JailbreakDependencyRewriter.mode(app: app, resources: plan.resources)
+            : nil
+        var didEmbedStub = false
         for entry in entries {
             let name = entry.item.dylibURL.lastPathComponent
             try embedDylib(entry, published: &published, emit: emit)
+            if let mode,
+               FileManager.default.fileExists(atPath: entry.embeddedURL.path),
+               !JailbreakDependencyRewriter.isSubstrateRuntimeFile(entry.embeddedURL) {
+                if !didEmbedStub,
+                   mode == .bundledStub,
+                   fileNeedsSubstrateStub(entry.embeddedURL) {
+                    try embedBundledSubstrateStub(in: app, emit: emit)
+                    didEmbedStub = true
+                    let stub = frameworksDirectory(in: app)
+                        .appendingPathComponent(JailbreakDependencyRewriter.stubFileName)
+                    if FileManager.default.fileExists(atPath: stub.path) {
+                        rewritten.append(stub)
+                    }
+                }
+                if try rewriteJailbreakDependencies(
+                    of: entry.embeddedURL,
+                    app: app,
+                    mainExecutable: mainExecutable,
+                    mode: mode,
+                    emit: emit
+                ) {
+                    rewritten.append(entry.embeddedURL)
+                }
+            }
             emit(InjectionProgressLog.injectStart(name))
             _ = try DylibInjector.inject(
                 requests: [
@@ -987,6 +1025,14 @@ public enum IpaInjectionWorkflow {
             )
             emit(InjectionProgressLog.injectSucceeded(name))
         }
+        return rewritten
+    }
+
+    private static func fileNeedsSubstrateStub(_ file: URL) -> Bool {
+        guard FileManager.default.fileExists(atPath: file.path),
+              !JailbreakDependencyRewriter.isSubstrateRuntimeFile(file) else { return false }
+        let paths = (try? DylibService.loadDependencyPaths(fileAt: file)) ?? []
+        return paths.contains(where: JailbreakDependencyRewriter.isCydiaSubstrate)
     }
 
     private static func embedDylib(
@@ -1022,36 +1068,6 @@ public enum IpaInjectionWorkflow {
         emit(InjectionProgressLog.copyDylibSucceeded(name))
     }
 
-    /// 整包扫描：改 Substrate / 其它越狱绝对路径。内置 stub 只拷进 Frameworks，不 LC_LOAD。
-    private static func rewriteJailbreakDependenciesIfNeeded(
-        plan: ValidatedInjectionPlan,
-        app: URL,
-        mainExecutable: URL,
-        emit: (String) -> Void
-    ) throws {
-        guard plan.rewriteJailbreakDependencies else { return }
-        let mode = JailbreakDependencyRewriter.mode(app: app, resources: plan.resources)
-        let files = FileSystemHelper.allFiles(in: app) { MachOIdentifier.isMachO(fileAt: $0) }
-        let needsStub = mode == .bundledStub && files.contains { file in
-            guard !JailbreakDependencyRewriter.isSubstrateRuntimeFile(file) else { return false }
-            let paths = (try? DylibService.loadDependencyPaths(fileAt: file)) ?? []
-            return paths.contains(where: JailbreakDependencyRewriter.isCydiaSubstrate)
-        }
-        if needsStub {
-            try embedBundledSubstrateStub(in: app, emit: emit)
-        }
-        for file in files {
-            guard !JailbreakDependencyRewriter.isSubstrateRuntimeFile(file) else { continue }
-            try rewriteJailbreakDependencies(
-                of: file,
-                app: app,
-                mainExecutable: mainExecutable,
-                mode: mode,
-                emit: emit
-            )
-        }
-    }
-
     private static func embedBundledSubstrateStub(in app: URL, emit: (String) -> Void) throws {
         guard let source = JailbreakDependencyRewriter.bundledStubURL() else {
             throw IpaInjectionWorkflowError.auditFailed(L("ipaflow.error.missingSubstrateStub"))
@@ -1064,27 +1080,26 @@ public enum IpaInjectionWorkflow {
             withIntermediateDirectories: true
         )
         try FileManager.default.copyItem(at: source, to: destination)
-        emit(L("ipaflow.log.substrateStubCopied"))
-        emit(L("ipaflow.log.substrateStubWarning"))
+        _ = emit
     }
 
+    @discardableResult
     private static func rewriteJailbreakDependencies(
         of file: URL,
         app: URL,
         mainExecutable: URL,
         mode: JailbreakDependencyRewriter.SubstrateMode,
         emit: (String) -> Void
-    ) throws {
-        let analysis = try DylibService.analyze(fileAt: file)
+    ) throws -> Bool {
+        let paths = try DylibService.loadDependencyPaths(fileAt: file)
         let changes = JailbreakDependencyRewriter.planRewrites(
-            for: analysis.dependencies.map(\.path),
+            for: paths,
             binary: file,
             app: app,
             mainExecutable: mainExecutable,
-            mode: mode,
-            installName: analysis.installName
+            mode: mode
         )
-        guard !changes.isEmpty else { return }
+        guard !changes.isEmpty else { return false }
         let name = file.lastPathComponent
         emit(InjectionProgressLog.discoveredDependencies(name))
         for change in changes {
@@ -1108,6 +1123,7 @@ public enum IpaInjectionWorkflow {
             _ = try DylibService.ensureRPath(rpath, fileAt: file)
         }
         emit(InjectionProgressLog.rewrittenDependencies(name))
+        return true
     }
 
     private static func frameworksDirectory(in app: URL) -> URL {
@@ -1230,8 +1246,8 @@ public enum IpaInjectionWorkflow {
         emit: (String) -> Void
     ) throws {
         let mappings: [(ComponentDisposition, [String], String)] = [
-            (policy.watch, ["Watch", "WatchPlaceholder"], InjectionProgressLog.removedWatch()),
             (policy.plugIns, ["PlugIns"], InjectionProgressLog.removedPlugIns()),
+            (policy.watch, ["Watch", "WatchPlaceholder"], InjectionProgressLog.removedWatch()),
             (policy.appClips, ["AppClips"], InjectionProgressLog.removedAppClips())
         ]
         for (disposition, names, line) in mappings where disposition == .remove {
@@ -1429,12 +1445,33 @@ public enum IpaInjectionWorkflow {
         return IpaArtifactDiffReport(before: before, after: after, diffs: diffs)
     }
 
+    private static func touchedMachOFiles(resolved: [ResolvedInjection], extras: [URL]) -> [URL] {
+        var files: [URL] = []
+        var seen = Set<String>()
+        for url in resolved.map(\.targetURL) + resolved.map(\.embeddedURL) + extras {
+            let path = url.standardizedFileURL.path
+            guard seen.insert(path).inserted,
+                  FileManager.default.fileExists(atPath: path),
+                  MachOIdentifier.isMachO(fileAt: url) else { continue }
+            files.append(url)
+        }
+        return files
+    }
+
     private static func snapshotMachO(in app: URL) throws -> [MachOArtifactSnapshot] {
         let files = FileSystemHelper.allFiles(in: app) { MachOIdentifier.isMachO(fileAt: $0) }
+        return try snapshotMachO(files: files, in: app, detailed: true)
+    }
+
+    private static func snapshotMachO(
+        files: [URL],
+        in app: URL,
+        detailed: Bool
+    ) throws -> [MachOArtifactSnapshot] {
         let snapshots = try files.compactMap { file -> MachOArtifactSnapshot? in
             guard let relative = relativePath(file, under: app) else { return nil }
-            let analysis = try DylibService.analyze(fileAt: file)
-            let slices = try DylibInjector.inspectLoadCommands(fileAt: file).map { slice in
+            let inspections = try DylibInjector.inspectLoadCommands(fileAt: file)
+            let slices = inspections.map { slice in
                 MachOSliceSnapshot(
                     index: slice.index,
                     loadCommands: slice.commands.map {
@@ -1442,14 +1479,27 @@ public enum IpaInjectionWorkflow {
                     }
                 )
             }
+            let loadPaths = inspections.flatMap(\.commands).map(\.path)
+            if detailed {
+                let analysis = try DylibService.analyze(fileAt: file)
+                return MachOArtifactSnapshot(
+                    relativePath: relative,
+                    sha256: analysis.sha256,
+                    architectures: analysis.architectures,
+                    slices: slices,
+                    dependencies: analysis.dependencies.map(\.path).sorted(),
+                    rpaths: analysis.rpaths.sorted(),
+                    signature: analysis.signature
+                )
+            }
             return MachOArtifactSnapshot(
                 relativePath: relative,
-                sha256: analysis.sha256,
-                architectures: analysis.architectures,
+                sha256: try DylibService.sha256(fileAt: file),
+                architectures: [],
                 slices: slices,
-                dependencies: analysis.dependencies.map(\.path).sorted(),
-                rpaths: analysis.rpaths.sorted(),
-                signature: analysis.signature
+                dependencies: Array(Set(loadPaths)).sorted(),
+                rpaths: [],
+                signature: .unavailable
             )
         }
         return snapshots.sorted { $0.relativePath < $1.relativePath }

@@ -351,7 +351,6 @@
 "workbench.ingest.snapshotting" = "Creating an immutable source snapshot of %@…";
 "workbench.ingest.snapshotDone" = "✅ Source snapshot locked read-only; the original is never modified";
 "workbench.deb.attached" = "✅ Added plugin candidates from %@";
-"workbench.deb.blocked" = "Blocked %@: not eligible as an in-IPA plugin";
 "workbench.section.target" = "Target package";
 "workbench.target.immutable" = "Immutable source snapshot — the original input is never overwritten";
 "workbench.host.title" = "Inject into";
@@ -360,8 +359,6 @@
 "workbench.host.note" = "The menu applies to this plugin only. Choose 3 / 2 / ProtobufLite to target that framework.";
 "workbench.target.identity" = "Main bundle ID: %@";
 "workbench.target.requiredProfiles" = "Bundle IDs needing a matching profile: %d";
-"workbench.section.blockedDebs" = "Blocked DEBs";
-"workbench.blockedDebs.note" = "These packages behave as device-level components (daemons / command-line tools / setuid / kernel-level) and are blocked as in-IPA plugins by default.";
 "workbench.section.unrecognized" = "Unrecognized inputs";
 "workbench.unrecognized.note" = "Left as-is rather than guessed.";
 "workbench.section.plugins" = "Plugins";
@@ -431,7 +428,6 @@
 "workbench.recipe.repairNightIcon" = "Fix dark-mode icon";
 "workbench.recipe.confirmRemoval" = "I confirm deleting the selected Watch / PlugIns / App Clips. Those features will be gone.";
 "workbench.recipe.rewriteJailbreakDeps" = "Rewrite jailbreak dependencies";
-"workbench.recipe.jailbreakDeps.note" = "When on, CydiaSubstrate / libsubstrate paths are rewritten into the app. If there is no CydiaSubstrate.framework yet, the bundled stub is copied into Frameworks (not injected into the main executable). That stub depends on libstdc++; on iOS 17+ prefer an in-app or ElleKit CydiaSubstrate.framework.";
 "ipaview.rewriteJailbreakDeps" = "Rewrite jailbreak dependencies";
 "tweaktab.rewriteJailbreakDeps" = "Rewrite jailbreak dependencies";
 "workbench.cannot.removalUnconfirmed" = "Confirm component removal before continuing.";
@@ -840,7 +836,6 @@
 "tweaktab.protobufLite3" = "Choose ProtobufLite3.framework";
 "tweaktab.elleKit" = "Optional: ElleKit’s CydiaSubstrate.framework";
 "tweaktab.clear" = "Clear";
-"tweaktab.substrateNote" = "With rewrite enabled, CydiaSubstrate / libsubstrate paths are retargeted inside the app. If no framework is present, the bundled stub is copied into Frameworks (not injected). The stub depends on libstdc++; on iOS 17+ prefer ElleKit or an in-app CydiaSubstrate.framework.";
 "tweaktab.weak" = "Use a weak reference (LC_LOAD_WEAK_DYLIB)";
 "tweaktab.stripSignature" = "Strip the code signature when header space runs out";
 "tweaktab.signMethod" = "Re-sign with";

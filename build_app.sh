@@ -120,7 +120,9 @@ if [[ "$ARCH_MODE" == "universal" ]]; then
 fi
 
 # 从 Resources/AppIcon.png 生成 AppIcon.icns 放进 bundle(临时 iconset 目录用完即删,不入库)。
+# 源图必须带 squircle 透明边:不透明白底会在旧系统 Launchpad 里显示成方块。
 echo "==> 生成 AppIcon.icns …"
+python3 scripts/render_app_icon.py "$ICON_SRC" --inspect
 ICON_TMP="$(mktemp -d)"
 # 发行链路里一旦有任何一步失败,绝不能把「已标记为已公证」的半成品留在 dist/。
 # 只有走完签名 + 公证 + 装订 + 校验后才会把 RELEASE_COMPLETE 置 1;否则退出时删除产物。
@@ -141,6 +143,8 @@ for SIZE in 16 32 128 256 512; do
   DBL=$((SIZE * 2))
   sips -z "$DBL" "$DBL"         "$ICON_SRC" --out "$ICONSET/icon_${SIZE}x${SIZE}@2x.png"  >/dev/null
 done
+# sips 缩放后仍须保住透明边,否则 iconutil 打出来又是方块。
+python3 scripts/render_app_icon.py "$ICONSET/icon_512x512@2x.png" --inspect
 iconutil -c icns "$ICONSET" -o "$CONTENTS/Resources/AppIcon.icns"
 ICON_NAME="AppIcon"
 
@@ -206,7 +210,6 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <array>${LOCALIZATIONS_XML}
     </array>
     <key>CFBundleIconFile</key><string>${ICON_NAME}</string>
-    <key>CFBundleIconName</key><string>${ICON_NAME}</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
     <key>CFBundleVersion</key><string>${VERSION}</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>

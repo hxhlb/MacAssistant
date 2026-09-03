@@ -212,10 +212,13 @@ public enum DylibService {
         return try changeLoadDependency(from: old, to: new, fileAt: url)
     }
 
-    /// `otool -L` 去掉安装名后剩下的真正 LC_LOAD_DYLIB。
+    /// 真正的 `LC_LOAD_*` 路径。走原生 inspect，不拉起 otool、也不哈希整文件。
     public static func loadDependencyPaths(fileAt url: URL) throws -> [String] {
-        let installName = try analyze(fileAt: url).installName
-        return try dependencies(fileAt: url).map(\.path).filter { $0 != installName }
+        var seen = Set<String>()
+        return try DylibInjector.inspectLoadCommands(fileAt: url)
+            .flatMap(\.commands)
+            .map(\.path)
+            .filter { seen.insert($0).inserted }
     }
 
     @discardableResult

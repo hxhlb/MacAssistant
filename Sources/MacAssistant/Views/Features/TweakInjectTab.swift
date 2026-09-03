@@ -112,8 +112,6 @@ struct TweakInjectTab: View {
                     }
                     if let elleKit { PathBadge(url: elleKit) }
                     Toggle(L("tweaktab.rewriteJailbreakDeps"), isOn: $rewriteJailbreakDependencies)
-                    Text(L("tweaktab.substrateNote"))
-                        .font(.caption).foregroundStyle(.secondary)
                     Toggle(L("tweaktab.weak"), isOn: $weak)
                     Toggle(L("tweaktab.stripSignature"), isOn: $stripSignature)
                     HStack {

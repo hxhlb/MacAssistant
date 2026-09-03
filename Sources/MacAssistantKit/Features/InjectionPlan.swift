@@ -222,12 +222,12 @@ public struct InjectionMetadataChanges: Codable, Hashable, Sendable {
         return next
     }
 
-    /// 未指定最低系统时落到 iOS 14，其它字段保持原样。
+    /// 工作台默认不再改最低系统，和 injectipa 一样；用户填了才写进去。
     public func resolvingWorkbenchDefaults() -> InjectionMetadataChanges {
         var next = self
         let current = next.minimumOSVersion?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if current.isEmpty {
-            next.minimumOSVersion = Self.defaultMinimumOSVersion
+            next.minimumOSVersion = nil
         }
         return next
     }
@@ -362,6 +362,16 @@ public struct InjectionComponentPolicy: Codable, Hashable, Sendable {
         self.destructiveRemovalConfirmed = destructiveRemovalConfirmed
     }
 
+    /// injectipa 默认：删 PlugIns / Watch，不删 App Clip，也不再单独确认。
+    public static var injectipaDefaults: InjectionComponentPolicy {
+        InjectionComponentPolicy(
+            watch: .remove,
+            plugIns: .remove,
+            appClips: .preserve,
+            destructiveRemovalConfirmed: true
+        )
+    }
+
     public var removesAnything: Bool {
         watch == .remove || plugIns == .remove || appClips == .remove
     }
@@ -408,7 +418,7 @@ public struct InjectionPlan: Codable, Hashable, Sendable {
     public var signing: InjectionSigningMode
     public var customOutputName: String?
     public var stripCodeSignatureIfNeeded: Bool
-    /// 开启后扫描整包，把越狱 Substrate 路径改到包内运行库，必要时拷内置 stub。
+    /// 开启后只改这次注入的插件依赖，必要时拷内置 stub。不扫主程序和小组件。
     public var rewriteJailbreakDependencies: Bool
 
     public init(

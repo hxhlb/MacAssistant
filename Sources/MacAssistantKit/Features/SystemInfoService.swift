@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import IOKit.ps
 
 public struct InfoItem: Identifiable, Sendable {
     public let id = UUID()
@@ -106,10 +107,9 @@ public enum SystemInfoService {
 
     /// 与内存工具页共用活动监视器口径，避免两个页面对“已用内存”给出不同数字。
     static func memoryUsage(total: UInt64) -> (used: UInt64, free: UInt64) {
-        guard let result = try? Shell.run("/usr/bin/vm_stat"), result.succeeded else {
+        guard let parsed = MemoryService.hostVMStatistics() else {
             return (0, total)
         }
-        let parsed = MemoryService.parseVMStat(result.stdout)
         let used = min(total, MemoryService.usedBytes(pages: parsed.pages, pageSize: parsed.pageSize))
         return (used, total - used)
     }
@@ -124,22 +124,64 @@ public enum SystemInfoService {
     }
 
     static func batteryInfo() -> (level: Double?, state: String?) {
-        guard let result = try? Shell.run("/usr/bin/pmset", ["-g", "batt"]), result.succeeded else {
-            return (nil, nil)
+        battery(from: copyPowerSourceDescriptions())
+    }
+
+    /// 把 IOKit 电源描述收成可测的字典，避免仪表盘启动再去 spawn `pmset`。
+    static func battery(from descriptions: [[String: Any]]) -> (level: Double?, state: String?) {
+        for description in descriptions {
+            let type = description[kIOPSTypeKey as String] as? String
+            guard type == kIOPSInternalBatteryType as String else { continue }
+            let current = intValue(description[kIOPSCurrentCapacityKey as String])
+            let maximum = intValue(description[kIOPSMaxCapacityKey as String])
+            let level: Double?
+            if let current, let maximum, maximum > 0 {
+                level = Double(current) / Double(maximum)
+            } else {
+                level = nil
+            }
+            return (level, batteryState(from: description))
         }
-        let text = result.stdout
-        guard let percentRange = text.range(of: #"\d+%"#, options: .regularExpression) else {
-            return (nil, nil)
+        return (nil, nil)
+    }
+
+    private static func batteryState(from description: [String: Any]) -> String? {
+        if boolValue(description[kIOPSIsChargingKey as String]) == true {
+            return L("sysinfo.battery.charging")
         }
-        let percentString = text[percentRange].replacingOccurrences(of: "%", with: "")
-        let level = (Double(percentString) ?? 0) / 100.0
-        let state: String?
-        if text.contains("discharging") { state = L("sysinfo.battery.discharging") }
-        else if text.contains("charging") { state = L("sysinfo.battery.charging") }
-        else if text.contains("charged") { state = L("sysinfo.battery.charged") }
-        else if text.contains("AC attached") || text.contains("AC Power") { state = L("sysinfo.battery.ac-power") }
-        else { state = nil }
-        return (level, state)
+        if boolValue(description[kIOPSIsChargedKey as String]) == true {
+            return L("sysinfo.battery.charged")
+        }
+        let power = description[kIOPSPowerSourceStateKey as String] as? String
+        if power == kIOPSBatteryPowerValue as String {
+            return L("sysinfo.battery.discharging")
+        }
+        if power == kIOPSACPowerValue as String {
+            return L("sysinfo.battery.ac-power")
+        }
+        return nil
+    }
+
+    private static func copyPowerSourceDescriptions() -> [[String: Any]] {
+        guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else { return [] }
+        guard let sources = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef] else {
+            return []
+        }
+        return sources.compactMap { source in
+            IOPSGetPowerSourceDescription(blob, source)?.takeUnretainedValue() as? [String: Any]
+        }
+    }
+
+    private static func intValue(_ value: Any?) -> Int? {
+        if let number = value as? Int { return number }
+        if let number = value as? NSNumber { return number.intValue }
+        return nil
+    }
+
+    private static func boolValue(_ value: Any?) -> Bool? {
+        if let flag = value as? Bool { return flag }
+        if let number = value as? NSNumber { return number.boolValue }
+        return nil
     }
 
     static func formatUptime(_ seconds: TimeInterval) -> String {

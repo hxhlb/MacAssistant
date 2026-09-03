@@ -129,13 +129,17 @@ public enum JailbreakDependencyRewriter {
     /// 非 Substrate 的越狱路径（Cephei、libhooker 等）仍改成 `@rpath/<basename>`。
     public static func genericRewriteTarget(for dependency: String) -> String? {
         if dependency.hasPrefix("@"), !isCydiaSubstrate(dependency) { return nil }
+        // `/System/Library/Frameworks/...` 含有子串 `/Library/Frameworks/`，
+        // 不能当越狱框架改写，否则会去改 SystemConfiguration 这类系统库然后整单失败。
+        if dependency.hasPrefix("/System/") { return nil }
         var path = dependency
         if path.hasPrefix("/var/jb") { path = String(path.dropFirst("/var/jb".count)) }
         if isCydiaSubstrate(path) { return nil }
         if path.contains("CydiaSubstrate.framework") {
             return nativeFrameworkPath
         }
-        if let range = path.range(of: "/Library/Frameworks/") {
+        if let range = path.range(of: "/Library/Frameworks/"),
+           !path[..<range.lowerBound].hasSuffix("/System") {
             return "@rpath/" + String(path[range.upperBound...])
         }
         if path.contains("/Library/MobileSubstrate/DynamicLibraries/") {

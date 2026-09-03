@@ -94,34 +94,27 @@ struct FeatureScaffold<Content: View, Trailing: View>: View {
     @ViewBuilder var content: () -> Content
     @ViewBuilder var trailing: () -> Trailing
 
-    private enum ScrollAnchor: Hashable { case top }
-
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    HStack(alignment: .firstTextBaseline) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(title).font(.largeTitle.bold())
-                            Text(subtitle).font(.callout).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        trailing()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title).font(.largeTitle.bold())
+                        Text(subtitle).font(.callout).foregroundStyle(.secondary)
                     }
-                    .id(ScrollAnchor.top)
-                    content()
+                    Spacer()
+                    trailing()
                 }
-                .padding(24)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                content()
             }
-            .softScrollEdgeEffect()
-            .onAppear {
-                // 页面里的第一个文本框会自动成为第一响应者，滚动视图为露出它会把页头顶出可视区。
-                DispatchQueue.main.async {
-                    proxy.scrollTo(ScrollAnchor.top, anchor: .top)
-                }
-            }
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .softScrollEdgeEffect()
+        // 不要在 onAppear 里 ScrollViewProxy.scrollTo：macOS 15.0–15.1 会在
+        // identity 尚未入图时 precondition 崩掉。首屏主线程再套 waitUntilExit
+        // 重入 runloop 时必现。初始锚点交给系统 API。
+        .defaultScrollAnchorTopIfAvailable()
         .featureSurfaceBackground()
     }
 }

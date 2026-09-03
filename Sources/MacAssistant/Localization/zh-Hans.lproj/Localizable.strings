@@ -351,7 +351,6 @@
 "workbench.ingest.snapshotting" = "正在为 %@ 建立不可变源快照…";
 "workbench.ingest.snapshotDone" = "✅ 源快照已锁为只读，原始输入永不被修改";
 "workbench.deb.attached" = "✅ 已从 %@ 添加插件候选";
-"workbench.deb.blocked" = "已阻止 %@：不适合作为 IPA 内插件";
 "workbench.section.target" = "目标包";
 "workbench.target.immutable" = "不可变源快照——原始输入永不被覆盖";
 "workbench.host.title" = "注入到";
@@ -360,8 +359,6 @@
 "workbench.host.note" = "下拉菜单只改这一条插件。选 3 / 2 / ProtobufLite 才会打对应 framework。";
 "workbench.target.identity" = "主 bundle ID：%@";
 "workbench.target.requiredProfiles" = "需匹配 profile 的 bundle ID：%d 个";
-"workbench.section.blockedDebs" = "被阻止的 DEB";
-"workbench.blockedDebs.note" = "这些包属于设备级组件（daemon / 命令行工具 / setuid / 内核级），默认不允许作为 IPA 内插件。";
 "workbench.section.unrecognized" = "无法识别的输入";
 "workbench.unrecognized.note" = "如实保留，不做猜测。";
 "workbench.section.plugins" = "插件";
@@ -431,7 +428,6 @@
 "workbench.recipe.repairNightIcon" = "修复夜间图标";
 "workbench.recipe.confirmRemoval" = "我确认要删除勾选的 Watch / PlugIns / App Clips，功能会丢失。";
 "workbench.recipe.rewriteJailbreakDeps" = "自动修改越狱依赖";
-"workbench.recipe.jailbreakDeps.note" = "开启后会把 CydiaSubstrate / libsubstrate 等越狱路径改到包内。没有现成 CydiaSubstrate.framework 时，把内置 stub 拷进 Frameworks（不注入主程序）。这份 stub 依赖 libstdc++，iOS 17+ 请优先用包内或 ElleKit 的 CydiaSubstrate.framework。";
 "ipaview.rewriteJailbreakDeps" = "自动修改越狱依赖";
 "tweaktab.rewriteJailbreakDeps" = "自动修改越狱依赖";
 "workbench.cannot.removalUnconfirmed" = "勾了移除组件后，请先确认删除。";
@@ -840,7 +836,6 @@
 "tweaktab.protobufLite3" = "选择 ProtobufLite3.framework";
 "tweaktab.elleKit" = "可选:ElleKit 的 CydiaSubstrate.framework";
 "tweaktab.clear" = "清除";
-"tweaktab.substrateNote" = "开启「自动修改越狱依赖」后，CydiaSubstrate / libsubstrate 会改到包内。没有现成 framework 时拷入内置 stub（不注入主程序）。stub 依赖 libstdc++，iOS 17+ 请用 ElleKit / 包内 CydiaSubstrate.framework。";
 "tweaktab.weak" = "使用弱引用(LC_LOAD_WEAK_DYLIB)";
 "tweaktab.stripSignature" = "头部空间不足时去除代码签名";
 "tweaktab.signMethod" = "重签名方式";

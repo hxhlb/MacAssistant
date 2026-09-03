@@ -68,6 +68,32 @@ final class JailbreakDependencyRewriterTests: XCTestCase {
         XCTAssertTrue(changes.isEmpty)
     }
 
+    func testDoesNotRewriteIOSSystemFrameworks() {
+        XCTAssertNil(
+            JailbreakDependencyRewriter.genericRewriteTarget(
+                for: "/System/Library/Frameworks/SystemConfiguration.framework/SystemConfiguration"
+            )
+        )
+        XCTAssertNil(
+            JailbreakDependencyRewriter.genericRewriteTarget(
+                for: "/System/Library/PrivateFrameworks/SpringBoard.framework/SpringBoard"
+            )
+        )
+        let changes = JailbreakDependencyRewriter.planRewrites(
+            for: [
+                "/System/Library/Frameworks/SystemConfiguration.framework/SystemConfiguration",
+                "/usr/lib/libSystem.B.dylib",
+                "/Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate"
+            ],
+            binary: plugin,
+            app: app,
+            mainExecutable: main,
+            mode: .bundledStub
+        )
+        XCTAssertEqual(changes.map(\.from), ["/Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate"])
+        XCTAssertFalse(changes.contains { $0.from.contains("SystemConfiguration") })
+    }
+
     func testGenericRewriteLeavesThemeBoxAsPluginIdentity() {
         let id = "/Library/MobileSubstrate/DynamicLibraries/ThemeBox.dylib"
         let changes = JailbreakDependencyRewriter.planRewrites(
@@ -236,5 +262,68 @@ final class JailbreakDependencyRewriterTests: XCTestCase {
         ))
         let rpaths = try DylibService.rpaths(fileAt: output.appendingPathComponent("Frameworks/Tweak.dylib"))
         XCTAssertTrue(rpaths.contains("@executable_path/Frameworks"))
+    }
+
+    /// 只改注入的插件，不扫小组件。injectipa 也是这个范围。
+    func testDoesNotRewriteUnrelatedAppExtension() throws {
+        for tool in [ExternalTool.clang, .otool, .installNameTool] where !tool.isAvailable {
+            throw XCTSkip("缺少 \(tool.commandName)")
+        }
+        let root = try FileSystemHelper.makeTemporaryDirectory(prefix: "rewrite-scope")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appendingPathComponent("WeChat.app")
+        let appex = app.appendingPathComponent("PlugIns/Widget.appex")
+        try FileManager.default.createDirectory(at: appex, withIntermediateDirectories: true)
+        try PropertyListSerialization.data(
+            fromPropertyList: [
+                "CFBundleExecutable": "WeChat",
+                "CFBundleIdentifier": "com.tencent.xin"
+            ],
+            format: .xml,
+            options: 0
+        ).write(to: app.appendingPathComponent("Info.plist"))
+        let source = root.appendingPathComponent("source.c")
+        try "int main(void) { return 0; }\n".write(to: source, atomically: true, encoding: .utf8)
+        XCTAssertTrue(try Shell.run(
+            ExternalTool.clang.path!,
+            ["-o", app.appendingPathComponent("WeChat").path, source.path, "-Wl,-headerpad,0x1000"]
+        ).succeeded)
+        let extensionBinary = appex.appendingPathComponent("Widget")
+        XCTAssertTrue(try Shell.run(
+            ExternalTool.clang.path!,
+            ["-o", extensionBinary.path, source.path, "-Wl,-headerpad,0x1000"]
+        ).succeeded)
+        _ = try DylibInjector.inject(
+            dylibPath: "/usr/lib/libsubstrate.dylib",
+            intoFileAt: extensionBinary,
+            stripCodeSignature: true
+        )
+        let plugin = root.appendingPathComponent("WCRefine.dylib")
+        XCTAssertTrue(try Shell.run(
+            ExternalTool.clang.path!,
+            ["-dynamiclib", "-o", plugin.path, source.path, "-Wl,-headerpad,0x1000"]
+        ).succeeded)
+        _ = try DylibInjector.inject(
+            dylibPath: "/usr/lib/libsubstrate.dylib",
+            intoFileAt: plugin,
+            stripCodeSignature: true
+        )
+        let output = root.appendingPathComponent("Out.app")
+        _ = try IpaInjectionWorkflow.execute(
+            InjectionPlan(
+                input: .app(app),
+                items: [InjectionItem(dylibURL: plugin)],
+                signing: .none
+            ),
+            outputURL: output
+        )
+        let pluginDeps = try DylibService.loadDependencyPaths(
+            fileAt: output.appendingPathComponent("Frameworks/WCRefine.dylib")
+        )
+        XCTAssertTrue(pluginDeps.contains("@loader_path/libsubstrate.dylib"))
+        let extensionDeps = try DylibService.loadDependencyPaths(
+            fileAt: output.appendingPathComponent("PlugIns/Widget.appex/Widget")
+        )
+        XCTAssertTrue(extensionDeps.contains("/usr/lib/libsubstrate.dylib"))
     }
 }

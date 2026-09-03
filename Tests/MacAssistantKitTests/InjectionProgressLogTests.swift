@@ -171,7 +171,7 @@ final class InjectionProgressLogTests: XCTestCase {
             ),
             outputURL: output,
             progress: { line in
-                if line == L("ipaflow.log.archiveValidated") {
+                if line == InjectionProgressLog.zipProgress(100) {
                     blocker.blockFinalAuditExtraction()
                 }
             }
@@ -252,17 +252,18 @@ final class InjectionProgressLogTests: XCTestCase {
         XCTAssertFalse(mainLoads.contains { $0.hasSuffix("libsubstrate.dylib") })
 
         assertContainsInOrder(result.log, [
-            InjectionProgressLog.removedWatch(),
-            InjectionProgressLog.removedPlugIns(),
-            InjectionProgressLog.fileSharingEnabled(),
             InjectionProgressLog.copyDylibSucceeded("WCRefine.dylib"),
-            InjectionProgressLog.injectStart("WCRefine.dylib"),
-            InjectionProgressLog.injectSucceeded("WCRefine.dylib"),
             InjectionProgressLog.discoveredDependencies("WCRefine.dylib"),
             InjectionProgressLog.rewrittenDependencies("WCRefine.dylib"),
+            InjectionProgressLog.injectStart("WCRefine.dylib"),
+            InjectionProgressLog.injectSucceeded("WCRefine.dylib"),
+            InjectionProgressLog.removedPlugIns(),
+            InjectionProgressLog.removedWatch(),
+            InjectionProgressLog.fileSharingEnabled(),
             InjectionProgressLog.clearedCache()
         ])
-        XCTAssertTrue(result.log.contains(L("ipaflow.log.substrateStubCopied")))
+        XCTAssertFalse(result.log.contains(L("ipaflow.log.substrateStubCopied")))
+        XCTAssertFalse(result.log.contains(L("ipaflow.log.substrateStubWarning")))
         XCTAssertFalse(result.log.contains(InjectionProgressLog.removedAppClips()))
         XCTAssertFalse(result.log.contains { $0.contains("删除Assets.car") })
         XCTAssertFalse(result.log.contains(InjectionProgressLog.zipStart()))

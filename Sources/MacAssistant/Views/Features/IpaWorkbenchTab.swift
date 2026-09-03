@@ -87,7 +87,6 @@ struct IpaWorkbenchTab: View {
         VStack(alignment: .leading, spacing: IpaLayout.sectionSpacing) {
             dropZone
             if controller.snapshot != nil { targetCard }
-            if !controller.blockedDebs.isEmpty { blockedDebsCard }
             if !controller.unrecognized.isEmpty { unrecognizedCard }
             if !controller.plugins.isEmpty { pluginsCard }
             if !controller.frameworks.isEmpty || !controller.bundles.isEmpty { resourcesCard }
@@ -171,7 +170,7 @@ struct IpaWorkbenchTab: View {
         route(panel.urls)
     }
 
-    /// 把拖入的一批 URL 分类并路由:目标包建快照、DEB 后台扫描并过适格性、其余同步分桶。
+    /// 把拖入的一批 URL 分类并路由:目标包建快照、DEB 后台扫描抽 dylib、其余同步分桶。
     /// 凑齐 p12 + 描述文件后密码空着就预填 1，可改。
     private func route(_ urls: [URL]) {
         let (targets, debs) = controller.ingestSimpleInputs(urls)
@@ -229,9 +228,7 @@ struct IpaWorkbenchTab: View {
                 }.value
                 controller.attachDeb(session: session, sourceName: url.lastPathComponent)
                 ok = true
-                log = session.pluginEligibility.isEligibleAsIpaPlugin
-                    ? L("workbench.deb.attached", url.lastPathComponent)
-                    : L("workbench.deb.blocked", url.lastPathComponent)
+                log = L("workbench.deb.attached", url.lastPathComponent)
             } catch {
                 ok = false
                 log = "❌ \(operationError(error, paths: [url]))"
@@ -268,29 +265,6 @@ struct IpaWorkbenchTab: View {
         case .protobufLite3: return "ProtobufLite3"
         case .protobufLite2: return "ProtobufLite2"
         case .protobufLite: return "ProtobufLite"
-        }
-    }
-
-    // MARK: - 被阻止的 DEB
-
-    private var blockedDebsCard: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 8) {
-                Label(L("workbench.section.blockedDebs"), systemImage: "hand.raised")
-                    .font(.headline).foregroundStyle(.orange)
-                Text(L("workbench.blockedDebs.note")).font(.caption).foregroundStyle(.secondary)
-                ForEach(controller.blockedDebs) { deb in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(deb.name).font(.subheadline.weight(.medium))
-                        ForEach(deb.factors) { factor in
-                            Text("• \(factor.explanation)")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(8)
-                    .insetSurfaceBackground(RoundedRectangle(cornerRadius: 8), legacyFill: .orange.opacity(0.08))
-                }
-            }
         }
     }
 
@@ -456,9 +430,6 @@ struct IpaWorkbenchTab: View {
                     get: { controller.recipe.rewriteJailbreakDependencies },
                     set: { controller.recipe.rewriteJailbreakDependencies = $0 }
                 ))
-                Text(L("workbench.recipe.jailbreakDeps.note"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
 
                 HStack {
                     Button {
@@ -510,19 +481,16 @@ struct IpaWorkbenchTab: View {
         )
     }
 
-    /// 最低系统不跟 IPA 走，默认 iOS 14，用户改了才写入。
+    /// 最低系统不跟 IPA 走。空着就不改，和 injectipa 一样。
     private var minimumOSBinding: Binding<String> {
         Binding(
             get: {
-                let value = controller.recipe.metadata.minimumOSVersion?
+                controller.recipe.metadata.minimumOSVersion?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return value.isEmpty ? InjectionMetadataChanges.defaultMinimumOSVersion : value
             },
             set: { newValue in
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                controller.recipe.metadata.minimumOSVersion = trimmed.isEmpty
-                    ? InjectionMetadataChanges.defaultMinimumOSVersion
-                    : trimmed
+                controller.recipe.metadata.minimumOSVersion = trimmed.isEmpty ? nil : trimmed
             }
         )
     }

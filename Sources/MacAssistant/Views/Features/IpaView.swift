@@ -728,9 +728,6 @@ struct InjectDylibTab: View {
                     Toggle(L("ipaview.removeURLSchemes"), isOn: $removeURLSchemes)
                 }
                 Toggle(L("ipaview.rewriteJailbreakDeps"), isOn: $rewriteJailbreakDependencies)
-                Text(L("workbench.recipe.jailbreakDeps.note"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 componentPolicyRow(
                     title: L("ipaview.removeWatch"),
                     explanation: L("ipaview.removeWatch.detail"),

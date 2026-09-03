@@ -113,8 +113,7 @@ public struct DebTweakCandidate: Identifiable, Sendable {
 
 public final class DebTweakCandidateSession: @unchecked Sendable {
     public let candidates: [DebTweakCandidate]
-    /// 该 .deb 作为 IPA 内插件的适用性。不适用时 candidates 仍会列出,由调用方决定是否阻止,
-    /// 从而既能复用分类结果,又不影响它在 DEB 打包页面作为合法输入。
+    /// 该 .deb 的结构分类(维护脚本 / daemon 等)。仅供诊断,注入时仍抽出 dylib。
     public let pluginEligibility: DebPluginEligibility
     fileprivate let scanSession: DebScanSession
 
@@ -135,7 +134,6 @@ public enum TweakInjectError: LocalizedError {
     case architectureMismatch(String)
     case unresolvedDependency(String)
     case outputExists(String)
-    case deviceLevelPackage(String)
     public var errorDescription: String? {
         switch self {
         case .noTweakFound: return L("tweak.error.noTweakFound")
@@ -143,7 +141,6 @@ public enum TweakInjectError: LocalizedError {
         case let .architectureMismatch(message): return L("tweak.error.architectureMismatch", message)
         case let .unresolvedDependency(message): return L("tweak.error.unresolvedDependency", message)
         case let .outputExists(path): return L("tweak.error.outputExists", path)
-        case let .deviceLevelPackage(message): return message
         }
     }
 }
@@ -322,16 +319,7 @@ public enum TweakInjectService {
             if tweak.pathExtension.lowercased() == "deb" {
                 let session = try candidateSession(inDebAt: tweak)
                 candidateSessions.append(session)
-                // 设备级包(LaunchDaemons / 命令行工具 / setuid / .kext 等)不该当 IPA 内插件:
-                // 抽个 dylib 塞进去既不符合作者意图,又会把设备级行为带进 App。默认阻止。
-                guard session.pluginEligibility.isEligibleAsIpaPlugin else {
-                    let reasons = session.pluginEligibility.factors
-                        .map { "• \($0.explanation)" }
-                        .joined(separator: "\n")
-                    throw TweakInjectError.deviceLevelPackage(
-                        L("tweak.error.deviceLevelPackage", tweak.lastPathComponent, reasons)
-                    )
-                }
+                // 不论包是否带维护脚本或设备级文件,都抽出 dylib 再注入。
                 let found = session.candidates.map(\.dylibURL)
                 if found.isEmpty { warnings.append(L("tweak.warning.noDylibInDeb", tweak.lastPathComponent)) }
                 dylibs.append(contentsOf: found)

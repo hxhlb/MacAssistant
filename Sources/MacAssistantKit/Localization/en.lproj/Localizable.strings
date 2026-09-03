@@ -515,7 +515,6 @@
 "tweak.error.architectureMismatchDetail" = "%@ does not cover the main executable slices %@; tweak=%@, main executable=%@";
 "tweak.error.unresolvedDependency" = "Unsatisfied dependency: %@";
 "tweak.error.outputExists" = "Output already exists; refusing to overwrite: %@";
-"tweak.error.deviceLevelPackage" = "%@ is a device-level package and is not suitable for injection as an in-IPA plugin:\n%@";
 "tweak.error.rewriteFailed" = "Failed to rewrite %@ → %@: %@";
 "tweak.error.missingSubstrateFramework" = "%@ depends on CydiaSubstrate, but no compatible CydiaSubstrate.framework was provided";
 "tweak.error.missingInstallNameTool" = "install_name_tool is missing, so the required rpath cannot be added";
@@ -571,8 +570,8 @@
 "dylib.macho.unsupported.fatSliceOverflow" = "A fat slice offset or length overflows";
 "dylib.macho.unsupported.fatSliceOverlap" = "Fat slice ranges overlap";
 "dylib.macho.unsupported.changeMissing" = "No load command to rewrite: %@";
-"ipaflow.log.substrateStubCopied" = "Copied the bundled libsubstrate stub into Frameworks (not injected into the main executable)";
-"ipaflow.log.substrateStubWarning" = "The bundled stub depends on libstdc++; on iOS 17+ prefer an in-app or ElleKit CydiaSubstrate.framework";
+"ipaflow.log.substrateStubCopied" = "Copied the bundled compatibility library into Frameworks";
+"ipaflow.log.substrateStubWarning" = "On newer iOS, if plugins fail to load, switch to a newer compatibility library";
 "ipaflow.error.missingSubstrateStub" = "The bundled libsubstrate.dylib is required but missing from resources";
 "dylib.macho.log.skippedExisting" = "Skipped existing load command: %@";
 "dylib.macho.log.replacedWithWeak" = "Replaced the existing command in slice %d with a weak reference: %@";

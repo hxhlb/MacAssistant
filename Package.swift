@@ -25,6 +25,9 @@ let package = Package(
             resources: [
                 .process("Localization"),
                 .copy("Resources/libsubstrate.dylib")
+            ],
+            linkerSettings: [
+                .linkedFramework("IOKit")
             ]
         ),
         .executableTarget(
