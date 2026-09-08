@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="docs/assets/macassistant-hero-brand.png" alt="MacAssistant" width="880">
+  <img src="docs/assets/app-icon.png" width="96" alt="MacAssistant">
 </p>
 
 <h1 align="center">MacAssistant</h1>
 
 <p align="center">
-  One native Mac app for system care and Apple-binary work.
+  Native macOS toolkit for system care, app clones, app repair, commands, and sideloading.
 </p>
 
 <p align="center">
@@ -28,51 +28,85 @@
   <a href="https://t.me/iosrxwy"><img src="https://img.shields.io/badge/Telegram-@iosrxwy-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram"></a>
 </p>
 
-## Why MacAssistant
-
-| Everyday Mac tools | Apple developer workflows | Built for confidence |
-| --- | --- | --- |
-| See system health, reclaim space, repair apps and inspect memory or network state. | Build DEB packages, inspect DYLIBs, process IPAs, edit Mach-O files and manage signing. | Preview-first actions, explicit confirmation, open source and no telemetry. |
-
-## What’s inside
-
-### Daily toolkit
-
-- **System overview** — chip, memory, disk, battery and uptime at a glance
-- **Safe cleanup** — caches, logs, Xcode data and other regenerable files
-- **App repair** — diagnose signatures, quarantine attributes and launch issues
-- **Memory & network** — pressure, processes, ports, ping, DNS and public IP
-- **Command library** — 262 searchable macOS commands with risk labels
-
-### Developer toolkit · Beta
-
-- **DEB** — create, inspect, unpack, convert and rebuild packages
-- **DYLIB** — inspect dependencies, extract libraries and rewrite install names or rpaths
-- **IPA** — drag-in workbench, install and extract (as-is, no FairPlay dump), injection, thinning, header extraction, layered signing, and Apple ID signing
-- **Mach-O** — native Swift inspection and dylib injection for thin or universal binaries
-- **Environment check** — find required tools and get guided setup actions
-
-## Screenshots
-
 <p align="center">
-  <img src="docs/assets/screenshots/system-cleanup.png" alt="System cleanup" width="49%">
-  <img src="docs/assets/screenshots/deb-wizard.png" alt="DEB wizard" width="49%">
+  <img src="docs/assets/macassistant-hero-brand.png" alt="System overview" width="880">
 </p>
 
 <p align="center">
-  <img src="docs/assets/screenshots/ipa-toolbox.png" alt="IPA toolbox" width="49%">
-  <img src="docs/assets/screenshots/system-overview.png" alt="System overview" width="49%">
+  <sub>Live CPU, memory, disk, and battery. Screenshots in Simplified Chinese; six languages are in About.</sub>
 </p>
+
+## Everyday features
+
+<table>
+  <tr>
+    <td align="center" width="50%" valign="top">
+      <img src="docs/assets/screenshots/system-cleanup.png" alt="System cleanup" width="430">
+      <br>
+      <b>Cleanup</b><br>
+      Preview caches, Derived Data, Docker, and Time Machine before anything is deleted. Home directory only.
+    </td>
+    <td align="center" width="50%" valign="top">
+      <img src="docs/assets/screenshots/app-clones.png" alt="App clones" width="430">
+      <br>
+      <b>App clones</b><br>
+      Isolated WeChat, browser, and editor copies — own data, optional per-clone proxy.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%" valign="top">
+      <img src="docs/assets/screenshots/desktop-icons.png" alt="Desktop icons" width="430">
+      <br>
+      <b>Desktop icons</b><br>
+      Recolor Finder icons for files, folders, and apps, with type presets.
+    </td>
+    <td align="center" width="50%" valign="top">
+      <img src="docs/assets/screenshots/ipa-workbench.png" alt="IPA workbench" width="430">
+      <br>
+      <b>IPA workbench</b><br>
+      Drag in an IPA, inject plugins, thin, dump headers, and sign. Beta.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%" valign="top">
+      <img src="docs/assets/screenshots/mac-inject.png" alt="Mac app injection" width="430">
+      <br>
+      <b>Mac app injection</b><br>
+      Inject a dylib into a local <code>.app</code>, or copy first, then inject. Beta.
+    </td>
+    <td align="center" width="50%" valign="top">
+      <img src="docs/assets/screenshots/environment.png" alt="Environment check" width="430">
+      <br>
+      <b>Environment check</b><br>
+      Find missing tools (Theos, zsign, Homebrew, codesign…) and get setup steps.
+    </td>
+  </tr>
+</table>
+
+### More features
+
+| Daily | Developer |
+| --- | --- |
+| App repair (“damaged” launches, quarantine, signatures) | DEB create, inspect, convert, rebuild |
+| Live memory pressure and process management | DYLIB dependencies, install names, rpaths |
+| Network: throughput, ports, ping, DNS, public IP | IPA install / extract as-is (no FairPlay dump) |
+| Searchable command library with risk labels | Mach-O inspection and class-dump |
+| Quick toggles for Finder, screenshots, hidden files | Layered signing and Apple ID signing |
+
+Preview before destructive actions. Open source, no telemetry.
+
+Page backgrounds, sidebar glass, icon colors, and six interface languages live in **About**.
 
 ## Download
 
-Universal Apple Silicon + Intel build: [Releases](https://github.com/iosrxwy/MacAssistant/releases). macOS 13+.
+Universal Apple Silicon + Intel: [Releases](https://github.com/iosrxwy/MacAssistant/releases). macOS 13+.
 
-Updates and notes: [X @iOSRXWY](https://x.com/iOSRXWY) · [Telegram](https://t.me/iosrxwy)
+Updates: [X @iOSRXWY](https://x.com/iOSRXWY) · [Telegram](https://t.me/iosrxwy)
 
 ### First launch blocked by macOS?
 
-This 1.0 release is **ad-hoc signed and not notarized**. Open the app once, then go to **System Settings → Privacy & Security → Open Anyway**. Do not turn Gatekeeper off.
+> [!IMPORTANT]
+> This release is **ad-hoc signed and not notarized**. Open the app once, then go to **System Settings → Privacy & Security → Open Anyway**. Do not turn Gatekeeper off.
 
 ## Build
 
@@ -82,26 +116,6 @@ cd MacAssistant
 ./build_app.sh release universal
 open "dist/Mac小助手.app"
 ```
-
-## Stars
-
-<p align="center">
-  <a href="https://github.com/iosrxwy/MacAssistant/stargazers"><img src="https://img.shields.io/github/stars/iosrxwy/MacAssistant?style=flat-square&logo=github" alt="GitHub stars"></a>
-</p>
-
-<p align="center">
-  <img src="https://progress-bar.xyz/dynamic/json/?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fiosrxwy%2FMacAssistant&query=%24.stargazers_count&scale=100&title=goal&width=420&color=0A84FF&suffix=%20/%20100&cache=3600" alt="Star goal">
-</p>
-
-<p align="center">
-  <a href="https://star-history.com/#iosrxwy/MacAssistant&Date">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=iosrxwy/MacAssistant&type=Date&theme=dark">
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=iosrxwy/MacAssistant&type=Date">
-      <img alt="Star History" src="https://api.star-history.com/svg?repos=iosrxwy/MacAssistant&type=Date" width="640">
-    </picture>
-  </a>
-</p>
 
 ## Contributors
 
@@ -134,12 +148,10 @@ open "dist/Mac小助手.app"
 
 ## Thanks
 
-[AltSign](https://github.com/rileytestut/AltSign) / [AltStore](https://github.com/altstoreio/AltStore) · [xtool](https://github.com/xtool-org/xtool) · [libimobiledevice](https://libimobiledevice.org) · [Theos](https://github.com/theos/theos) · [zsign](https://github.com/zhlynn/zsign)
-
-None of these binaries are bundled.
+[AltSign](https://github.com/rileytestut/AltSign) / [AltStore](https://github.com/altstoreio/AltStore) · [xtool](https://github.com/xtool-org/xtool) · [libimobiledevice](https://libimobiledevice.org) · [Theos](https://github.com/theos/theos) · [zsign](https://github.com/zhlynn/zsign) · [ATBClone](https://github.com/aitobox/ATBClone)
 
 ## License
 
-[GNU GPL-3.0](LICENSE). Distributed modifications must remain free software under the same license, with complete corresponding source. This does not authorize bundling other projects: `class-dump` is also GPL-3.0 and needs its corresponding source; `dsdump` has no clear license and must not be redistributed; AltStore / AltSign are AGPL-3.0 and are referenced as protocol documentation only.
+[GNU GPL-3.0](LICENSE). Distributed modifications must remain free software under the same license, with complete corresponding source.
 
 Security reports: [SECURITY.md](SECURITY.md).

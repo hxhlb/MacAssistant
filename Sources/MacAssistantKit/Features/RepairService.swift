@@ -158,70 +158,29 @@ public enum RepairService {
 
     // MARK: - 4. 刷新 DNS
 
-    public static let flushDNSCommand = "sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder"
+    public static let flushDNSCommand = NetworkService.flushDNSCommand
 
     @discardableResult
     public static func flushDNS() throws -> CommandResult {
-        try AdminRunner.runSequence([
-            try AdminRunner.PrivilegedCommand(
-                executable: "/usr/bin/dscacheutil",
-                arguments: ["-flushcache"]
-            ),
-            try AdminRunner.PrivilegedCommand(
-                executable: "/usr/bin/killall",
-                arguments: ["-HUP", "mDNSResponder"]
-            )
-        ])
+        try NetworkService.flushDNS()
     }
 
     // MARK: - 5. 查端口 -> 杀进程
 
-    /// 列出占用某端口的进程(基于 lsof)。
     public static func processes(onPort port: Int) -> [PortProcess] {
-        guard port > 0, port <= 65535 else { return [] }
-        guard let r = try? Shell.run("/usr/sbin/lsof", ["-nP", "-i", ":\(port)"]) else { return [] }
-        var seen = Set<String>()
-        var result: [PortProcess] = []
-        for line in r.stdout.split(separator: "\n").dropFirst() {
-            let parts = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
-            guard parts.count >= 2 else { continue }
-            if seen.insert(parts[1]).inserted {
-                result.append(PortProcess(pid: parts[1], command: parts[0]))
-            }
-        }
-        return result
+        NetworkService.processes(onPort: port)
     }
 
     public static func killCommand(pids: [String], force: Bool) -> String {
-        "kill \(force ? "-9" : "-15") \(pids.joined(separator: " "))"
+        NetworkService.killCommand(pids: pids, force: force)
     }
 
     @discardableResult
     public static func kill(pids: [String], force: Bool) throws -> CommandResult {
-        let validated = pids.compactMap(Int32.init)
-        guard validated.count == pids.count, validated.allSatisfy({ $0 > 1 }) else {
-            throw NSError(domain: "RepairService", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: L("repair.error.invalid-pid-list")])
-        }
-        guard !validated.isEmpty else {
-            return CommandResult(exitCode: 0, stdout: L("repair.kill.no-process"), stderr: "")
-        }
-        let arguments = [force ? "-9" : "-15"] + validated.map(String.init)
-        let local = try Shell.run("/bin/kill", arguments)
-        if needsPrivilege(local) {
-            return try AdminRunner.run(executable: "/bin/kill", arguments: arguments)
-        }
-        return local
+        try NetworkService.kill(pids: pids, force: force)
     }
 
-    // MARK: - 7. 清理开发缓存
-
-    /// 开发相关的可清理目标(Xcode / brew / npm·pip 等,用户级、无需 sudo)。
-    public static func devCacheTargets() -> [CleanupTarget] {
-        let ids: Set<String> = ["xcode-derived", "xcode-devicesupport", "simulator-caches",
-                                 "homebrew", "npm", "yarn", "pip", "cocoapods", "gradle"]
-        return CleanupService.makeTargets().filter { ids.contains($0.id) }
-    }
+    // MARK: - Docker / Time Machine（系统清理页调用）
 
     public static let dockerPruneCommand = "docker system prune -a --volumes -f"
 
@@ -230,7 +189,46 @@ public enum RepairService {
         try Shell.script(dockerPruneCommand)
     }
 
-    // MARK: - 8. Time Machine 本地快照
+    /// 解析 `docker system df --format '{{json .}}'` 各行的 Reclaimable。
+    public static func dockerReclaimableBytes(from dfOutput: String) -> Int64 {
+        dfOutput.split(separator: "\n").reduce(0) { total, line in
+            guard let data = String(line).data(using: .utf8),
+                  let row = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let text = row["Reclaimable"] as? String
+            else {
+                return total
+            }
+            return total + parseDockerSize(text)
+        }
+    }
+
+    public static func queryDockerReclaimable() -> Int64? {
+        guard let docker = Shell.which("docker") else { return nil }
+        guard let result = try? Shell.run(docker, ["system", "df", "--format", "{{json .}}"]),
+              result.succeeded
+        else {
+            return nil
+        }
+        return dockerReclaimableBytes(from: result.stdout)
+    }
+
+    /// 解析 Docker 的 "1.23GB (45%)" 字符串。
+    public static func parseDockerSize(_ text: String) -> Int64 {
+        let scanner = Scanner(string: text)
+        guard let value = scanner.scanDouble() else { return 0 }
+        let unit = scanner.scanCharacters(from: .letters)?.uppercased() ?? "B"
+        let multiplier: Double
+        switch unit {
+        case "KB": multiplier = 1_000
+        case "MB": multiplier = 1_000_000
+        case "GB": multiplier = 1_000_000_000
+        case "TB": multiplier = 1_000_000_000_000
+        default: multiplier = 1
+        }
+        return Int64(value * multiplier)
+    }
+
+    // MARK: - Time Machine 本地快照
 
     /// 从快照名(com.apple.TimeMachine.2026-01-07-221601.local)提取日期串。
     public static func parseSnapshotDate(_ name: String) -> String? {

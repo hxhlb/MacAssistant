@@ -136,17 +136,55 @@ public enum Shell {
         try run("/bin/zsh", ["-lc", command], currentDirectory: currentDirectory)
     }
 
-    /// 在常见目录中查找工具的绝对路径,找不到返回 nil。
+    /// 在 PATH 与常见目录中查找工具的绝对路径，找不到返回 nil。
+    ///
+    /// 只做文件系统探测，绝不拉起 `/usr/bin/which`：`Process.waitUntilExit`
+    /// 会在主线程重入 runloop。SwiftUI 渲染期一碰就会
+    /// `AG::precondition_failure` 闪退（系统清理页曾经因此必现）。
     public static func which(_ tool: String) -> String? {
-        if let result = try? run("/usr/bin/which", [tool]), result.succeeded {
-            let path = result.trimmedOutput
-            if !path.isEmpty { return path }
+        guard isSearchableToolName(tool) else { return nil }
+        return candidatePaths(for: tool).first {
+            FileManager.default.isExecutableFile(atPath: $0)
         }
-        let candidates = HostArchitecture.homebrewBinaryPaths(tool) + [
-            "/usr/bin/\(tool)",
-            "/bin/\(tool)"
-        ]
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// 拒绝带路径分隔符的名字，避免把 `which` 当成任意路径探测。
+    static func isSearchableToolName(_ tool: String) -> Bool {
+        !tool.isEmpty && !tool.hasPrefix(".") && !tool.contains("/")
+    }
+
+    static func candidatePaths(for tool: String) -> [String] {
+        var seen = Set<String>()
+        var paths: [String] = []
+
+        func appendFile(_ path: String) {
+            let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+            guard seen.insert(standardized).inserted else { return }
+            paths.append(standardized)
+        }
+
+        func appendDirectory(_ directory: String) {
+            appendFile(
+                URL(fileURLWithPath: directory, isDirectory: true)
+                    .appendingPathComponent(tool)
+                    .path
+            )
+        }
+
+        for raw in (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            .split(separator: ":", omittingEmptySubsequences: true)
+        {
+            let directory = String(raw)
+            if directory == "." || directory == ".." { continue }
+            appendDirectory(directory)
+        }
+        for path in HostArchitecture.homebrewBinaryPaths(tool) {
+            appendFile(path)
+        }
+        for directory in ["/usr/bin", "/bin", "/usr/sbin", "/sbin", "/usr/libexec"] {
+            appendDirectory(directory)
+        }
+        return paths
     }
 
     /// 判断某个工具是否可用。

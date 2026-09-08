@@ -73,8 +73,10 @@ public struct DebDraft: Identifiable, Codable, Hashable, Sendable {
 public final class WorkspaceStore: ObservableObject {
     @Published public private(set) var items: [WorkspaceItem.ID: WorkspaceItem] = [:]
     @Published public private(set) var requestedDestination: AppDestination?
+    @Published public private(set) var pendingSearchQuery: String?
     @Published public private(set) var pendingDylibItemID: WorkspaceItem.ID?
     @Published public private(set) var pendingDebDraft: DebDraft?
+    @Published public private(set) var pendingAppCloneURL: URL?
     private var managedRoots: [URL] = []
 
     public init() {}
@@ -189,14 +191,34 @@ public final class WorkspaceStore: ObservableObject {
         createDebDraft(from: ids)
     }
 
+    public func request(_ destination: AppDestination, searchQuery: String? = nil) {
+        pendingSearchQuery = searchQuery
+        requestedDestination = destination
+    }
+
     public func acknowledgeNavigation() {
         requestedDestination = nil
+    }
+
+    public func consumePendingSearchQuery() -> String? {
+        defer { pendingSearchQuery = nil }
+        return pendingSearchQuery
     }
 
     public func consumePendingDylib() -> WorkspaceItem? {
         defer { pendingDylibItemID = nil }
         guard let id = pendingDylibItemID else { return nil }
         return items[id]
+    }
+
+    public func requestAppClone(source: URL) {
+        pendingAppCloneURL = source
+        requestedDestination = .appClone
+    }
+
+    public func consumePendingAppCloneURL() -> URL? {
+        defer { pendingAppCloneURL = nil }
+        return pendingAppCloneURL
     }
 
     public func consumePendingDebDraft() -> [WorkspaceItem] {

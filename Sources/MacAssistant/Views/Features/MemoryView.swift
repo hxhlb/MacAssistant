@@ -9,10 +9,15 @@ struct MemoryView: View {
     @State private var selectedPID: Int32?
     @State private var query = ""
     @State private var busy = false
+    @State private var live = true
     @State private var statusText = ""
+    @State private var showingTopProcessHint = false
     @State private var pendingSignal: PendingSignal?
     @State private var showPurgeConfirmation = false
     @State private var developerOperationsExpanded = false
+    @State private var loadGeneration = 0
+    @State private var isLoading = false
+    @State private var terminateRefreshTask: Task<Void, Never>?
 
     private var filteredProcesses: [ProcessMemoryInfo] {
         processes.filter { $0.matches(query) }
@@ -38,10 +43,18 @@ struct MemoryView: View {
                         .accessibilityIdentifier("memory.status")
                 }
             }
+        } trailing: {
+            Toggle(isOn: $live) {
+                Label(L("dashboard.live"), systemImage: "dot.radiowaves.left.and.right")
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .help(L("memoryview.live.help"))
+            .accessibilityIdentifier("memory.live")
         }
         .toolbar {
             Button {
-                refresh()
+                Task { await refresh(markBusy: true, force: true) }
             } label: {
                 Label(L("memoryview.refresh"), systemImage: "arrow.clockwise")
             }
@@ -49,7 +62,37 @@ struct MemoryView: View {
             .disabled(busy)
             .accessibilityIdentifier("memory.refresh")
         }
-        .task { refresh() }
+        .task(id: live) {
+            if !live {
+                terminateRefreshTask?.cancel()
+                terminateRefreshTask = nil
+            }
+            await refresh(markBusy: snapshot == nil)
+            guard live else { return }
+            while live, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard live, !Task.isCancelled else { break }
+                if busy { continue }
+                await refresh()
+            }
+        }
+        .onReceive(
+            NSWorkspace.shared.notificationCenter.publisher(
+                for: NSWorkspace.didTerminateApplicationNotification
+            )
+        ) { _ in
+            guard live, !busy else { return }
+            terminateRefreshTask?.cancel()
+            terminateRefreshTask = Task {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                guard !Task.isCancelled else { return }
+                await refresh(force: true)
+            }
+        }
+        .onDisappear {
+            terminateRefreshTask?.cancel()
+            terminateRefreshTask = nil
+        }
         .alert(item: $pendingSignal) { pending in
             let force = pending.signal == .kill
             return Alert(
@@ -127,14 +170,8 @@ struct MemoryView: View {
 
                 HStack {
                     Button {
-                        selectedPID = processes.first?.pid
-                        if let process = processes.first {
-                            statusText = L(
-                                "memoryview.topProcess",
-                                process.displayName,
-                                MemoryService.formatBytes(process.memoryBytes)
-                            )
-                        }
+                        showingTopProcessHint = true
+                        applyTopProcessHint()
                     } label: {
                         Label(L("memoryview.showTopProcess"), systemImage: "list.number")
                     }
@@ -180,7 +217,7 @@ struct MemoryView: View {
                         .lineLimit(1)
                     Spacer()
                     TextField(L("memoryview.search"), text: $query)
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.soft)
                         .frame(width: 220)
                         .accessibilityLabel(L("memoryview.search.accessibility"))
                         .accessibilityIdentifier("memory.search")
@@ -211,9 +248,11 @@ struct MemoryView: View {
                             icon: iconProvider.icon(for: process)
                         )
                             .tag(process.pid)
+                            .sceneListRowFill()
                     }
                 }
                 .listStyle(.inset)
+                .sceneListChrome()
                 .frame(minHeight: 270, idealHeight: 360)
                 .accessibilityIdentifier("memory.processList")
             }
@@ -228,28 +267,62 @@ struct MemoryView: View {
         }
     }
 
-    private func refresh() {
-        guard !busy else { return }
-        busy = true
-        Task {
-            do {
-                let result = try await Task.detached {
-                    (try MemoryService.snapshot(), try MemoryService.processes())
-                }.value
-                snapshot = result.0
-                iconProvider.retain(processes: result.1)
-                processes = result.1
-                if let selectedPID, !processes.contains(where: { $0.pid == selectedPID }) {
-                    self.selectedPID = nil
-                }
-            } catch {
-                statusText = error.localizedDescription
+    private func refresh(markBusy: Bool = false, force: Bool = false) async {
+        if isLoading && !force && !markBusy { return }
+        if markBusy {
+            busy = true
+        }
+        isLoading = true
+        loadGeneration += 1
+        let generation = loadGeneration
+        defer {
+            if generation == loadGeneration {
+                isLoading = false
             }
-            busy = false
+            if markBusy { busy = false }
+        }
+        do {
+            let result = try await Task.detached(priority: .utility) {
+                (try MemoryService.snapshot(), try MemoryService.processes())
+            }.value
+            guard generation == loadGeneration else { return }
+            apply(snapshot: result.0, processes: result.1)
+        } catch {
+            guard generation == loadGeneration, markBusy else { return }
+            statusText = error.localizedDescription
+        }
+    }
+
+    private func apply(snapshot newSnapshot: MemorySnapshot, processes newProcesses: [ProcessMemoryInfo]) {
+        if snapshot != newSnapshot {
+            snapshot = newSnapshot
+        }
+        if processes != newProcesses {
+            iconProvider.retain(processes: newProcesses)
+            processes = newProcesses
+        }
+        if let selectedPID, !processes.contains(where: { $0.pid == selectedPID }) {
+            self.selectedPID = nil
+        }
+        applyTopProcessHint()
+    }
+
+    private func applyTopProcessHint() {
+        guard showingTopProcessHint else { return }
+        if let process = processes.first {
+            selectedPID = process.pid
+            statusText = L(
+                "memoryview.topProcess",
+                process.displayName,
+                MemoryService.formatBytes(process.memoryBytes)
+            )
+        } else if !statusText.isEmpty {
+            statusText = ""
         }
     }
 
     private func send(_ signal: ProcessSignal, to process: ProcessMemoryInfo) {
+        showingTopProcessHint = false
         busy = true
         Task {
             do {
@@ -263,12 +336,11 @@ struct MemoryView: View {
                     signal == .terminate ? "SIGTERM" : "SIGKILL"
                 )
                 try? await Task.sleep(nanoseconds: 600_000_000)
-                busy = false
-                refresh()
+                await refresh(force: true)
             } catch {
-                busy = false
                 statusText = error.localizedDescription
             }
+            busy = false
         }
     }
 
@@ -334,8 +406,9 @@ private struct ProcessMemoryRow: View {
                 Text(process.displayName)
                     .lineLimit(1)
                 Text(processRowSubtitle(process))
-                    .font(.caption2.monospacedDigit())
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
             Spacer()
             Text(MemoryService.formatBytes(process.memoryBytes))
@@ -351,17 +424,21 @@ private struct ProcessMemoryRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(L(
             "memoryview.row.accessibility",
-            process.displayName,
+            process.remark.map { "\(process.displayName)，\($0)" } ?? process.displayName,
             Int(process.pid),
             MemoryService.formatBytes(process.memoryBytes)
         ))
     }
 
     private func processRowSubtitle(_ process: ProcessMemoryInfo) -> String {
-        if process.displayName.compare(process.name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
-            return "PID \(process.pid)"
+        let pid = "PID \(process.pid)"
+        if let remark = process.remark, !remark.isEmpty {
+            return "\(remark) · \(pid)"
         }
-        return "\(process.name) · PID \(process.pid)"
+        if process.displayName.compare(process.name, options: [.caseInsensitive, .diacriticInsensitive]) != .orderedSame {
+            return "\(process.name) · \(pid)"
+        }
+        return pid
     }
 }
 

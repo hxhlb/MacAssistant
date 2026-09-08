@@ -957,7 +957,7 @@ public enum SigningService {
         let originalRootID = rootPlist["CFBundleIdentifier"] as? String ?? ""
         var changed: [String] = []
         for bundle in try profileBundles(in: app) {
-            let plist = try IpaService.infoPlist(appBundle: bundle)
+            guard let plist = try? IpaService.infoPlist(appBundle: bundle) else { continue }
             guard let originalID = plist["CFBundleIdentifier"] as? String else { continue }
             let finalID = transformedBundleID(
                 originalID,

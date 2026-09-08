@@ -249,7 +249,7 @@ struct EnvironmentView: View {
         .accessibilityLabel(L(
             "env.tool.accessibility",
             availability.tool.commandName,
-            availability.isAvailable ? L("env.installed") : L("env.notInstalled")
+            statusLabel(for: availability)
         ))
         .accessibilityIdentifier("environment.tool.\(availability.id)")
     }
@@ -365,10 +365,20 @@ struct EnvironmentView: View {
 
     private func toolDetail(_ availability: ToolAvailability) -> String {
         if let path = availability.path { return path }
-        if case let .homebrewFormula(formula) = availability.installStrategy {
+        switch availability.installStrategy {
+        case let .homebrewFormula(formula):
             return L("env.missing.formula", formula)
+        case let .builtInFallback(description, _):
+            return description
+        case .xcodeCommandLineTools, .systemProvided, .openProjectPage:
+            return availability.installHint.map { L("env.missing.hint", $0) } ?? L("env.missing")
         }
-        return availability.installHint.map { L("env.missing.hint", $0) } ?? L("env.missing")
+    }
+
+    private func statusLabel(for availability: ToolAvailability) -> String {
+        if availability.isAvailable { return L("env.installed") }
+        if case .builtInFallback = availability.installStrategy { return L("env.optional") }
+        return L("env.notInstalled")
     }
 
     private func statusIcon(for availability: ToolAvailability) -> String {

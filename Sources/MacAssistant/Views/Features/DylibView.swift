@@ -130,8 +130,8 @@ struct DylibView: View {
 
                         VStack(alignment: .leading, spacing: 6) {
                             Text(L("dylibview.changeDependency")).font(.subheadline.weight(.medium))
-                            TextField(L("dylibview.oldPath"), text: $changeOld).textFieldStyle(.roundedBorder)
-                            TextField(L("dylibview.newPath"), text: $changeNew).textFieldStyle(.roundedBorder)
+                            TextField(L("dylibview.oldPath"), text: $changeOld).textFieldStyle(.soft)
+                            TextField(L("dylibview.newPath"), text: $changeNew).textFieldStyle(.soft)
                             Button(L("dylibview.apply")) {
                                 guard let url = fileURL else { return }
                                 let old = changeOld, new = changeNew
@@ -145,7 +145,7 @@ struct DylibView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(L("dylibview.addRPath")).font(.subheadline.weight(.medium))
                             HStack {
-                                TextField("rpath", text: $newRPath).textFieldStyle(.roundedBorder)
+                                TextField("rpath", text: $newRPath).textFieldStyle(.soft)
                                 Button(L("dylibview.add")) {
                                     guard let url = fileURL else { return }
                                     let value = newRPath

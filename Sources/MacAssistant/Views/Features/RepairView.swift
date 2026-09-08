@@ -3,28 +3,19 @@ import UniformTypeIdentifiers
 import MacAssistantKit
 
 struct RepairView: View {
+    @ObservedObject var workspace: WorkspaceStore
     @StateObject private var task = TaskState()
 
     @State private var selectedApp: URL?
     @State private var removeSignatureFirst = false
 
-    @State private var portText = ""
-    @State private var portProcs: [PortProcess] = []
-    @State private var portQuerying = false
-
-    @State private var snapshots: [SnapshotEntry] = []
-    @State private var snapshotQuerying = false
-
-    @State private var devTargets: [CleanupTarget] = RepairService.devCacheTargets()
-    @State private var devScanning = false
-
     var body: some View {
         FeatureScaffold(title: L("repairview.title"),
                         subtitle: L("repairview.subtitle")) {
+            ToolFinderCard(workspace: workspace)
+            PermissionGuideCard(needs: PermissionGuide.repair)
             console
             signingSection
-            networkSection
-            cleanupSection
             interfaceSection
             footnote
         }
@@ -135,139 +126,7 @@ struct RepairView: View {
         }
     }
 
-    // MARK: 4-8 网络与进程 / 清理与内存
-
-    private var networkSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sectionTitle(L("repairview.section.network"), L("repairview.section.network.detail"))
-
-            RepairActionCard(
-                title: L("repairview.flushDNS.title"),
-                detail: L("repairview.flushDNS.detail"),
-                risk: .caution,
-                command: RepairService.flushDNSCommand,
-                actionTitle: L("repairview.flushDNS.action"),
-                disabled: task.running
-            ) { performResult { try RepairService.flushDNS() } }
-
-            Card {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text(L("repairview.port.title")).font(.callout.weight(.semibold))
-                        RiskBadge(risk: .caution)
-                        Spacer()
-                    }
-                    HStack {
-                        TextField(L("repairview.port.placeholder"), text: $portText)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 200)
-                        Button { queryPort() } label: {
-                            Label(portQuerying ? L("repairview.port.querying") : L("repairview.port.query"), systemImage: "magnifyingglass")
-                        }.disabled(portQuerying || Int(portText) == nil)
-                    }
-                    if !portProcs.isEmpty {
-                        commandPreview(RepairService.killCommand(pids: portProcs.map(\.pid), force: false))
-                        ForEach(portProcs) { proc in
-                            HStack {
-                                Image(systemName: "gearshape.2").foregroundStyle(.secondary)
-                                Text("\(proc.command)  ").font(.callout)
-                                Text("PID \(proc.pid)").font(.caption).foregroundStyle(.secondary)
-                                Spacer()
-                                Button(L("repairview.kill")) { killPids([proc.pid], force: false) }
-                                    .buttonStyle(.borderless)
-                                Button(role: .destructive) { killPids([proc.pid], force: true) } label: {
-                                    Text(L("repairview.forceKill"))
-                                }.buttonStyle(.borderless)
-                            }
-                            .padding(8)
-                            .insetSurfaceBackground(RoundedRectangle(cornerRadius: 8), legacyFill: .black.opacity(0.04))
-                        }
-                        Button(role: .destructive) { killPids(portProcs.map(\.pid), force: true) } label: {
-                            Label(L("repairview.forceKillAll"), systemImage: "xmark.octagon")
-                        }
-                    } else if portQuerying == false && Int(portText) != nil {
-                        Text(L("repairview.port.empty"))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-    }
-
-    private var cleanupSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sectionTitle(L("repairview.section.cleanup"), L("repairview.section.cleanup.detail"))
-
-            Card {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text(L("repairview.devCache.title")).font(.callout.weight(.semibold))
-                        RiskBadge(risk: .caution)
-                        Spacer()
-                        Button { scanDev() } label: {
-                            Label(devScanning ? L("repairview.scanning") : L("repairview.scan"), systemImage: "magnifyingglass")
-                        }.disabled(devScanning)
-                        Button(role: .destructive) { cleanDev() } label: {
-                            Label(L("repairview.cleanSelected"), systemImage: "trash")
-                        }.disabled(devTargets.filter { $0.selected }.isEmpty)
-                    }
-                    Text(L("repairview.devCache.detail"))
-                        .font(.caption).foregroundStyle(.secondary)
-                    ForEach(devTargets) { target in
-                        DevCacheRow(target: target)
-                    }
-                    Divider()
-                    HStack {
-                        Text(L("repairview.docker.title")).font(.caption.weight(.semibold))
-                        RiskBadge(risk: .danger)
-                        Spacer()
-                        Button(role: .destructive) { runDockerPrune() } label: {
-                            Label("prune", systemImage: "shippingbox")
-                        }.buttonStyle(.borderless).disabled(task.running)
-                    }
-                    Text(L("repairview.docker.detail"))
-                        .font(.caption2).foregroundStyle(.secondary)
-                    commandPreview(RepairService.dockerPruneCommand)
-                }
-            }
-
-            Card {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text(L("repairview.snapshots.title")).font(.callout.weight(.semibold))
-                        RiskBadge(risk: .caution)
-                        Spacer()
-                        Button { querySnapshots() } label: {
-                            Label(snapshotQuerying ? L("repairview.port.querying") : L("repairview.snapshots.list"), systemImage: "clock.arrow.circlepath")
-                        }.disabled(snapshotQuerying)
-                    }
-                    Text(L("repairview.snapshots.detail"))
-                        .font(.caption).foregroundStyle(.secondary)
-                    if snapshots.isEmpty {
-                        Text(L("repairview.snapshots.empty")).font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        ForEach(snapshots) { snap in
-                            HStack {
-                                Image(systemName: "camera.aperture").foregroundStyle(.secondary)
-                                Text(snap.date).font(.system(.caption, design: .monospaced))
-                                Spacer()
-                                Button(role: .destructive) { deleteSnapshot(snap.date) } label: { Text(L("repairview.delete")) }
-                                    .buttonStyle(.borderless)
-                            }
-                            .padding(8)
-                            .insetSurfaceBackground(RoundedRectangle(cornerRadius: 8), legacyFill: .black.opacity(0.04))
-                        }
-                    }
-                    commandPreview(RepairService.thinSnapshotsCommand)
-                    Button(role: .destructive) { runThinSnapshots() } label: {
-                        Label(L("repairview.snapshots.thin"), systemImage: "arrow.down.circle")
-                    }.disabled(task.running)
-                }
-            }
-        }
-    }
-
-    // MARK: 9-12 界面与系统
+    // MARK: 界面与系统
 
     private var interfaceSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -293,12 +152,6 @@ struct RepairView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-
-            recipeCard(title: L("repairview.screenshots.title"), detail: L("repairview.screenshots.detail"), recipes: RecipeLibrary.screenshot)
-            recipeCard(title: L("repairview.visibility.title"), detail: L("repairview.visibility.detail"),
-                       recipes: RecipeLibrary.finder.filter {
-                           ["finder-show-hidden-on", "finder-show-hidden-off", "finder-extensions"].contains($0.id)
-                       })
 
             // Intel 机器本身就跑 x86_64,不存在可安装的转译层,整张卡片不显示。
             if HostArchitecture.isAppleSiliconHardware {
@@ -349,29 +202,6 @@ struct RepairView: View {
         .insetSurfaceBackground(RoundedRectangle(cornerRadius: 8), legacyFill: .black.opacity(0.05))
     }
 
-    private func recipeCard(title: String, detail: String, recipes: [ShellRecipe]) -> some View {
-        Card {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(title).font(.callout.weight(.semibold))
-                Text(detail).font(.caption).foregroundStyle(.secondary)
-                ForEach(recipes) { recipe in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(recipe.name).font(.caption.weight(.medium))
-                            Text(recipe.command).font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                        }
-                        Spacer()
-                        CopyButton(text: recipe.command)
-                        Button(L("recipesview.run")) { runRecipe(recipe) }.buttonStyle(.borderless).disabled(task.running)
-                    }
-                    .padding(8)
-                    .insetSurfaceBackground(RoundedRectangle(cornerRadius: 8), legacyFill: .black.opacity(0.04))
-                }
-            }
-        }
-    }
-
     // MARK: 动作
 
     private func performResult(_ work: @escaping @Sendable () throws -> CommandResult) {
@@ -412,83 +242,12 @@ struct RepairView: View {
         }
     }
 
-    private func runThinSnapshots() {
-        performResult { try RepairService.thinSnapshots() }
-    }
-
-    private func runDockerPrune() {
-        performResult { try RepairService.dockerPrune() }
-    }
-
-    private func runRecipe(_ recipe: ShellRecipe) {
-        performResult { try RecipeLibrary.run(recipe) }
-    }
-
     private func openSystemSettings() {
         if let url = URL(string: RepairService.privacySecurityURL) {
             NSWorkspace.shared.open(url)
         }
     }
 
-    private func queryPort() {
-        guard let port = Int(portText) else { return }
-        portQuerying = true
-        portProcs = []
-        DispatchQueue.global(qos: .userInitiated).async {
-            let procs = RepairService.processes(onPort: port)
-            DispatchQueue.main.async {
-                portProcs = procs
-                portQuerying = false
-            }
-        }
-    }
-
-    private func killPids(_ pids: [String], force: Bool) {
-        guard !pids.isEmpty else { return }
-        let copy = pids
-        performResult { try RepairService.kill(pids: copy, force: force) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { queryPort() }
-    }
-
-    private func querySnapshots() {
-        snapshotQuerying = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            let list = RepairService.localSnapshots()
-            DispatchQueue.main.async {
-                snapshots = list
-                snapshotQuerying = false
-            }
-        }
-    }
-
-    private func deleteSnapshot(_ date: String) {
-        performResult { try RepairService.deleteSnapshot(date: date) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { querySnapshots() }
-    }
-
-    private func scanDev() {
-        devScanning = true
-        let items = devTargets.map { ($0.id, $0.paths) }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let sizes = items.map { ($0.0, CleanupService.size(ofPaths: $0.1)) }
-            DispatchQueue.main.async {
-                for (id, size) in sizes { devTargets.first { $0.id == id }?.size = size }
-                devScanning = false
-            }
-        }
-    }
-
-    private func cleanDev() {
-        let selected = devTargets.filter { $0.selected }
-        let items = selected.map { ($0.id, $0.paths) }
-        guard !items.isEmpty else { return }
-        performTask(task) {
-            var freed: Int64 = 0
-            for (_, paths) in items { freed += CleanupService.cleanPaths(paths) }
-            return L("repairview.devCache.cleaned", FileSystemHelper.humanReadableSize(freed))
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { scanDev() }
-    }
 }
 
 // MARK: - 子组件
@@ -538,25 +297,5 @@ private struct RepairActionCard: View {
                 }
             }
         }
-    }
-}
-
-private struct DevCacheRow: View {
-    @ObservedObject var target: CleanupTarget
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Toggle("", isOn: $target.selected).labelsHidden()
-            VStack(alignment: .leading, spacing: 1) {
-                Text(target.name).font(.caption.weight(.medium))
-                Text(target.detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer()
-            Text(target.size > 0 ? FileSystemHelper.humanReadableSize(target.size) : "—")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(target.size > 0 ? .primary : .secondary)
-        }
-        .padding(8)
-        .insetSurfaceBackground(RoundedRectangle(cornerRadius: 8), legacyFill: .black.opacity(0.04))
     }
 }

@@ -3,6 +3,12 @@
 # 将 Swift Package 可执行文件打包为可双击运行的 macOS .app。
 # 用法:./build_app.sh [debug|release] [universal|native]
 #
+# 签名分流（环境变量，绝不写进仓库）:
+#   MA_SIGN_IDENTITY     Developer ID，走公证发行链路
+#   MA_LOCAL_SIGN_IDENTITY  本机已有证书，只签名不公证（覆盖安装可保留 TCC）
+#   MA_ADHOC=1           强制 ad-hoc（每次重编都会丢完全磁盘访问 / App 管理）
+# 未设置以上变量时，自动创建并复用「MacAssistant Local」自签证书。
+#
 # 默认产出 x86_64 + arm64 通用二进制:Intel Mac 无法运行 arm64 切片,
 # 只打宿主架构会让在 Apple Silicon 上构建的发行版在 Intel 机器上直接打不开。
 # 本地快速迭代可用 native 只编当前架构。
@@ -35,7 +41,7 @@ APP_NAME="Mac小助手"
 BUNDLE_ID="com.opensource.macassistant"
 # 新增一门语言:在这里加语言代码,并在两个 target 的 Localization/<代码>.lproj/ 放字符串表。
 DEVELOPMENT_REGION="zh-Hans"
-APP_LOCALIZATIONS="zh-Hans en"
+APP_LOCALIZATIONS="zh-Hans zh-Hant en es ko ru"
 VERSION_FILE="Resources/AppVersion.txt"
 [[ -f "$VERSION_FILE" ]] || { echo "错误:缺少版本文件 $VERSION_FILE" >&2; exit 1; }
 IFS= read -r VERSION < "$VERSION_FILE"
@@ -121,14 +127,35 @@ fi
 
 # 从 Resources/AppIcon.png 生成 AppIcon.icns 放进 bundle(临时 iconset 目录用完即删,不入库)。
 # 源图必须带 squircle 透明边:不透明白底会在旧系统 Launchpad 里显示成方块。
+echo "==> 编译应用分身辅助程序 …"
+HELPERS="$CONTENTS/Helpers"
+mkdir -p "$HELPERS"
+CLONE_SRC="Sources/MacAssistantKit/Resources/CloneSupport"
+if [[ "$ARCH_MODE" == "universal" ]]; then
+  CLONE_ARCHS=(-arch arm64 -arch x86_64)
+else
+  HOST_ARCH="$(uname -m)"
+  [[ "$HOST_ARCH" == "arm64" || "$HOST_ARCH" == "x86_64" ]] || HOST_ARCH="arm64"
+  CLONE_ARCHS=(-arch "$HOST_ARCH")
+fi
+clang -O2 "${CLONE_ARCHS[@]}" -framework Foundation \
+  -o "$HELPERS/MacAssistantCloneLauncher" "$CLONE_SRC/clone_launcher.m"
+clang -dynamiclib -O2 "${CLONE_ARCHS[@]}" -framework Foundation \
+  -install_name @executable_path/../Frameworks/libMacAssistantCloneEnv.dylib \
+  -o "$HELPERS/libMacAssistantCloneEnv.dylib" "$CLONE_SRC/clone_env.m"
+
 echo "==> 生成 AppIcon.icns …"
 python3 scripts/render_app_icon.py "$ICON_SRC" --inspect
 ICON_TMP="$(mktemp -d)"
 # 发行链路里一旦有任何一步失败,绝不能把「已标记为已公证」的半成品留在 dist/。
 # 只有走完签名 + 公证 + 装订 + 校验后才会把 RELEASE_COMPLETE 置 1;否则退出时删除产物。
 RELEASE_COMPLETE=0
+LOCAL_SIGN_KEYCHAIN=""
+LOCAL_SIGN_SAVED_KEYCHAINS=()
+restore_local_signing_keychain() { :; }
 cleanup() {
   local code=$?
+  restore_local_signing_keychain
   rm -rf "$ICON_TMP"
   if [[ "${RELEASE_MODE:-0}" -eq 1 && "$RELEASE_COMPLETE" -ne 1 && -d "${APP:-}" ]]; then
     echo "⚠️ 发行链路未完整成功(退出码 $code),删除可能被误标为已公证的产物:$APP" >&2
@@ -151,7 +178,8 @@ ICON_NAME="AppIcon"
 # 让访达 / 系统设置认得这是本地化 App,并按语言给出显示名。
 localized_display_name() {
   case "$1" in
-    en) printf 'Mac Assistant' ;;
+    en|es|ru) printf 'Mac Assistant' ;;
+    ko) printf 'Mac 도우미' ;;
     *)  printf '%s' "$APP_NAME" ;;
   esac
 }
@@ -166,12 +194,119 @@ STRINGS
 done
 
 # ── 发行模式判定 ───────────────────────────────────────────────────────────
-# 只有显式提供 Developer ID 签名身份(MA_SIGN_IDENTITY)才进入发行链路;否则保持 ad-hoc 开发签名。
-# 所有证书/凭据一律从环境变量读取,绝不写进仓库或产物。
+# 只有显式提供 Developer ID 签名身份(MA_SIGN_IDENTITY)才进入发行链路。
+# 开发构建默认用本机稳定证书,避免每次覆盖安装都丢掉 TCC(完全磁盘访问 / App 管理)。
+# 所有证书/凭据一律从环境变量或本机 Application Support 读取,绝不写进仓库或产物。
 # 判定必须在写 Info.plist 之前完成,因为 MacAssistantBuildKind 直接决定 About 页如何显示。
 SIGN_IDENTITY="${MA_SIGN_IDENTITY:-}"
+LOCAL_SIGN_IDENTITY=""
+LOCAL_SIGN_KEYCHAIN=""
+LOCAL_SIGN_KEYCHAIN_PASSWORD=""
+LOCAL_SIGN_DEFAULT_KEYCHAIN=""
+LOCAL_SIGN_SAVED_KEYCHAINS=()
 ENTITLEMENTS="Resources/MacAssistant.entitlements"
 NOTARY_ARGS=()
+
+restore_local_signing_keychain() {
+  if [[ -n "$LOCAL_SIGN_DEFAULT_KEYCHAIN" ]]; then
+    security default-keychain -d user -s "$LOCAL_SIGN_DEFAULT_KEYCHAIN" >/dev/null 2>&1 || true
+    LOCAL_SIGN_DEFAULT_KEYCHAIN=""
+  fi
+  if [[ ${#LOCAL_SIGN_SAVED_KEYCHAINS[@]} -gt 0 ]]; then
+    security list-keychains -d user -s "${LOCAL_SIGN_SAVED_KEYCHAINS[@]}" >/dev/null 2>&1 || true
+    LOCAL_SIGN_SAVED_KEYCHAINS=()
+  fi
+  if [[ -n "$LOCAL_SIGN_KEYCHAIN" && -f "$LOCAL_SIGN_KEYCHAIN" ]]; then
+    security delete-keychain "$LOCAL_SIGN_KEYCHAIN" >/dev/null 2>&1 || true
+  fi
+  LOCAL_SIGN_KEYCHAIN=""
+  LOCAL_SIGN_KEYCHAIN_PASSWORD=""
+}
+
+# 创建或复用本机自签代码签名证书。成功时设置 LOCAL_SIGN_IDENTITY / LOCAL_SIGN_KEYCHAIN。
+setup_local_signing() {
+  local cn="MacAssistant Local"
+  if [[ -n "${MA_LOCAL_SIGN_IDENTITY:-}" ]]; then
+    LOCAL_SIGN_IDENTITY="$MA_LOCAL_SIGN_IDENTITY"
+    return 0
+  fi
+
+  command -v openssl >/dev/null || return 1
+  command -v security >/dev/null || return 1
+
+  local store="${MA_LOCAL_CERT_DIR:-$HOME/Library/Application Support/com.opensource.macassistant/signing}"
+  local p12="$store/MacAssistantLocal.p12"
+  local passfile="$store/p12.pass"
+  mkdir -p "$store"
+  chmod 700 "$store"
+
+  if [[ ! -f "$p12" || ! -f "$passfile" ]]; then
+    echo "==> 创建本机稳定签名证书（仅此一次，覆盖安装可保留 TCC）…"
+    local pass
+    pass="$(openssl rand -hex 16)" || return 1
+    local cfg="$ICON_TMP/local-codesign.cnf"
+    cat > "$cfg" <<'CNF'
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_codesign
+prompt = no
+
+[req_distinguished_name]
+CN = MacAssistant Local
+O = MacAssistant Local
+
+[v3_codesign]
+basicConstraints = CA:FALSE
+keyUsage = critical, digitalSignature
+extendedKeyUsage = critical, codeSigning
+subjectKeyIdentifier = hash
+CNF
+    local key="$ICON_TMP/local-codesign.key"
+    local cert="$ICON_TMP/local-codesign.crt"
+    openssl req -new -x509 -days 3650 -nodes -newkey rsa:2048 \
+      -keyout "$key" -out "$cert" -config "$cfg" >/dev/null 2>&1 || return 1
+    openssl pkcs12 -export -inkey "$key" -in "$cert" -out "$p12" \
+      -passout "pass:$pass" -name "$cn" \
+      -legacy >/dev/null 2>&1 || \
+    openssl pkcs12 -export -inkey "$key" -in "$cert" -out "$p12" \
+      -passout "pass:$pass" -name "$cn" >/dev/null 2>&1 || return 1
+    printf '%s' "$pass" > "$passfile"
+    chmod 600 "$p12" "$passfile"
+    rm -f "$key" "$cert"
+  fi
+
+  local pass
+  pass="$(cat "$passfile")" || return 1
+  [[ -n "$pass" && -f "$p12" ]] || return 1
+
+  LOCAL_SIGN_SAVED_KEYCHAINS=()
+  local line
+  while IFS= read -r line; do
+    line="${line#*\"}"
+    line="${line%\"*}"
+    [[ -n "$line" ]] && LOCAL_SIGN_SAVED_KEYCHAINS+=("$line")
+  done < <(security list-keychains -d user)
+  LOCAL_SIGN_DEFAULT_KEYCHAIN="$(security default-keychain -d user | sed 's/^[[:space:]]*"//;s/"$//')"
+
+  LOCAL_SIGN_KEYCHAIN="$ICON_TMP/ma-sign.keychain-db"
+  rm -f "$LOCAL_SIGN_KEYCHAIN"
+  LOCAL_SIGN_KEYCHAIN_PASSWORD="$(openssl rand -hex 16)" || return 1
+  security create-keychain -p "$LOCAL_SIGN_KEYCHAIN_PASSWORD" "$LOCAL_SIGN_KEYCHAIN" >/dev/null || return 1
+  if [[ -n "$LOCAL_SIGN_DEFAULT_KEYCHAIN" ]]; then
+    security default-keychain -d user -s "$LOCAL_SIGN_DEFAULT_KEYCHAIN" >/dev/null || true
+  fi
+  security set-keychain-settings -lut 21600 "$LOCAL_SIGN_KEYCHAIN" >/dev/null || true
+  security unlock-keychain -p "$LOCAL_SIGN_KEYCHAIN_PASSWORD" "$LOCAL_SIGN_KEYCHAIN" >/dev/null || return 1
+  security list-keychains -d user -s "$LOCAL_SIGN_KEYCHAIN" "${LOCAL_SIGN_SAVED_KEYCHAINS[@]}" >/dev/null || return 1
+
+  security import "$p12" -k "$LOCAL_SIGN_KEYCHAIN" -P "$pass" \
+    -T /usr/bin/codesign -T /usr/bin/security -A >/dev/null || return 1
+  security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+    -k "$LOCAL_SIGN_KEYCHAIN_PASSWORD" "$LOCAL_SIGN_KEYCHAIN" >/dev/null || true
+
+  LOCAL_SIGN_IDENTITY="$cn"
+}
+
 if [[ -n "$SIGN_IDENTITY" ]]; then
   RELEASE_MODE=1
   BUILD_KIND="Release (Developer ID, notarized & stapled)"
@@ -192,7 +327,16 @@ if [[ -n "$SIGN_IDENTITY" ]]; then
   fi
 else
   RELEASE_MODE=0
-  BUILD_KIND="Development (ad-hoc, not notarized)"
+  if [[ "${MA_ADHOC:-0}" != "1" ]] && setup_local_signing; then
+    BUILD_KIND="Development (local certificate, not notarized)"
+  else
+    restore_local_signing_keychain
+    LOCAL_SIGN_IDENTITY=""
+    BUILD_KIND="Development (ad-hoc, not notarized)"
+    if [[ "${MA_ADHOC:-0}" != "1" ]]; then
+      echo "⚠️ 本机稳定证书不可用，回退 ad-hoc。覆盖安装会失去完全磁盘访问等 TCC 授权。" >&2
+    fi
+  fi
 fi
 
 cat > "$CONTENTS/Info.plist" <<PLIST
@@ -224,6 +368,10 @@ PLIST
 if [[ "$RELEASE_MODE" -eq 1 ]]; then
   echo "==> Developer ID 签名 + Hardened Runtime（由内向外，附安全时间戳）…"
   # 先签内层可执行文件,再签整个 .app;两层都启用 runtime 加固并写入最小 entitlements。
+  codesign --force --options runtime --timestamp \
+    --sign "$SIGN_IDENTITY" "$HELPERS/MacAssistantCloneLauncher"
+  codesign --force --options runtime --timestamp \
+    --sign "$SIGN_IDENTITY" "$HELPERS/libMacAssistantCloneEnv.dylib"
   codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGN_IDENTITY" "$CONTENTS/MacOS/MacAssistant"
@@ -258,8 +406,24 @@ if [[ "$RELEASE_MODE" -eq 1 ]]; then
 
   # 走到这里才算发行链路完整成功,产物中的「已公证」标记与事实一致。
   RELEASE_COMPLETE=1
+elif [[ -n "$LOCAL_SIGN_IDENTITY" ]]; then
+  echo "==> 本机稳定证书签名（${LOCAL_SIGN_IDENTITY}，未公证）…"
+  local_codesign() {
+    if [[ -n "$LOCAL_SIGN_KEYCHAIN" ]]; then
+      codesign --force --sign "$LOCAL_SIGN_IDENTITY" --keychain "$LOCAL_SIGN_KEYCHAIN" "$@"
+    else
+      codesign --force --sign "$LOCAL_SIGN_IDENTITY" "$@"
+    fi
+  }
+  local_codesign "$HELPERS/MacAssistantCloneLauncher"
+  local_codesign "$HELPERS/libMacAssistantCloneEnv.dylib"
+  local_codesign "$CONTENTS/MacOS/MacAssistant"
+  local_codesign "$APP"
+  codesign --verify --strict --verbose=4 "$APP"
 else
   echo "==> ad-hoc 开发签名（非 Developer ID、未公证）…"
+  codesign --force --sign - "$HELPERS/MacAssistantCloneLauncher"
+  codesign --force --sign - "$HELPERS/libMacAssistantCloneEnv.dylib"
   codesign --force --sign - "$CONTENTS/MacOS/MacAssistant"
   codesign --force --sign - "$APP"
   codesign --verify --strict --verbose=4 "$APP"

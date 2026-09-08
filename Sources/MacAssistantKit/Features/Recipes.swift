@@ -36,6 +36,18 @@ public enum RecipeLibrary {
 
     public static let all: [ShellRecipe] = finder + dock + screenshot + maintenance + security
 
+    public static func search(_ keyword: String) -> [ShellRecipe] {
+        let key = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return all }
+        return all.filter { recipe in
+            TextSearch.matches(recipe.name, needle: key)
+                || TextSearch.matches(recipe.detail, needle: key)
+                || TextSearch.matches(recipe.command, needle: key)
+                || TextSearch.matches(recipe.category, needle: key)
+                || TextSearch.matches(recipe.id, needle: key)
+        }
+    }
+
     public static let finder: [ShellRecipe] = [
         .init(id: "finder-show-hidden-on", categoryID: "finder",
               command: "defaults write com.apple.finder AppleShowAllFiles -bool true && killall Finder"),

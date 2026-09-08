@@ -150,7 +150,7 @@ struct BinaryView: View {
                 }
                 HStack {
                     TextField(L("binaryview.search"), text: $searchText)
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.soft)
                     Picker(L("binaryview.kind"), selection: $targetFilter) {
                         ForEach(TargetFilter.allCases) { Text($0.title).tag($0) }
                     }

@@ -377,17 +377,17 @@ struct IpaWorkbenchTab: View {
                 Text(L("workbench.recipe.note")).font(.caption).foregroundStyle(.secondary)
 
                 TextField(L("ipaview.displayName"), text: metadataBinding(\.displayName, fallback: \.displayName))
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.soft)
                 TextField(L("ipaview.bundleID"), text: metadataBinding(\.bundleID, fallback: \.bundleID))
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.soft)
                 Text(L("workbench.recipe.bundleID.note"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 HStack {
                     TextField(L("ipaview.shortVersion"), text: metadataBinding(\.shortVersion, fallback: \.shortVersion))
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.soft)
                     TextField(L("ipaview.minimumOS"), text: minimumOSBinding)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.soft)
                 }
                 Text(L("workbench.recipe.minimumOS.note"))
                     .font(.caption)
@@ -589,7 +589,7 @@ struct IpaWorkbenchTab: View {
                     adoptWorkbenchCertificateMaterials(urls)
                 }
                 TextField(L("signingtab.p12Password"), text: $controller.developerCertificatePassword)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.soft)
                     .frame(maxWidth: 220)
             }
             if !workbenchCertificateMessage.isEmpty {
@@ -652,12 +652,12 @@ struct IpaWorkbenchTab: View {
                 .foregroundStyle(.secondary)
             HStack {
                 TextField(L("signingtab.appleID.account"), text: $appleID)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.soft)
                 SecureField(L("signingtab.appleID.password"), text: $appleIDPassword)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.soft)
             }
             TextField(L("signingtab.appleID.twoFactor"), text: $appleIDTwoFactor)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.soft)
             HStack {
                 Button {
                     loginWorkbenchAppleID()
@@ -685,9 +685,9 @@ struct IpaWorkbenchTab: View {
             }
             HStack {
                 TextField(L("signingtab.appleID.manualUDID.placeholder"), text: $workbenchManualUDID)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.soft)
                 TextField(L("signingtab.appleID.manualName.placeholder"), text: $workbenchManualName)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.soft)
                     .frame(maxWidth: 160)
                 Button(L("workbench.signing.useManualUDID")) {
                     applyWorkbenchManualUDID()

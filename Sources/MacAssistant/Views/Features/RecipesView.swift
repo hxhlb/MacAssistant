@@ -2,12 +2,18 @@ import SwiftUI
 import MacAssistantKit
 
 struct RecipesView: View {
+    @ObservedObject var workspace: WorkspaceStore
+    @State private var query = ""
     @State private var runningID: String?
     @State private var resultText = ""
     @State private var resultOK: Bool?
 
+    private var filtered: [ShellRecipe] {
+        RecipeLibrary.search(query)
+    }
+
     private var grouped: [(String, [ShellRecipe])] {
-        let dict = Dictionary(grouping: RecipeLibrary.all, by: \.categoryID)
+        let dict = Dictionary(grouping: filtered, by: \.categoryID)
         return RecipeLibrary.categoryIDs.compactMap { categoryID in
             guard let items = dict[categoryID], let first = items.first else { return nil }
             return (first.category, items)
@@ -29,6 +35,14 @@ struct RecipesView: View {
                 }
             }
 
+            if grouped.isEmpty {
+                Card {
+                    Text(L("recipesview.empty"))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             ForEach(grouped, id: \.0) { category, items in
                 VStack(alignment: .leading, spacing: 8) {
                     Text(category).font(.headline).foregroundStyle(.tint)
@@ -40,6 +54,18 @@ struct RecipesView: View {
                 }
             }
         }
+        .searchable(text: $query, placement: .toolbar, prompt: L("recipesview.searchPrompt"))
+        .task {
+            applyPendingSearch()
+        }
+        .onChange(of: workspace.pendingSearchQuery) { _ in
+            applyPendingSearch()
+        }
+    }
+
+    private func applyPendingSearch() {
+        guard let pending = workspace.consumePendingSearchQuery(), !pending.isEmpty else { return }
+        query = pending
     }
 
     private func run(_ recipe: ShellRecipe) {

@@ -14,6 +14,8 @@ public struct TheosTweakTemplateRequest: Sendable {
     public var targetBundleID: String
     public var minimumIOS: String
     public var layout: DebPackageLayout
+    public var hookClassNames: [String]
+    public var includeFridaTrace: Bool
 
     public init(
         name: String,
@@ -22,7 +24,9 @@ public struct TheosTweakTemplateRequest: Sendable {
         description: String,
         targetBundleID: String,
         minimumIOS: String,
-        layout: DebPackageLayout
+        layout: DebPackageLayout,
+        hookClassNames: [String] = [],
+        includeFridaTrace: Bool = false
     ) {
         self.name = name
         self.packageID = packageID
@@ -31,6 +35,8 @@ public struct TheosTweakTemplateRequest: Sendable {
         self.targetBundleID = targetBundleID
         self.minimumIOS = minimumIOS
         self.layout = layout
+        self.hookClassNames = hookClassNames
+        self.includeFridaTrace = includeFridaTrace
     }
 }
 
@@ -62,7 +68,7 @@ public enum TheosProjectError: LocalizedError {
 
 public enum TheosProjectService {
     private static let editableExtensions: Set<String> = [
-        "xm", "x", "m", "mm", "h", "swift", "plist", "strings", "json", "yaml", "yml"
+        "xm", "x", "m", "mm", "h", "swift", "js", "plist", "strings", "json", "yaml", "yml"
     ]
     private static let editableNames: Set<String> = ["Makefile", "control"]
 
@@ -123,21 +129,34 @@ public enum TheosProjectService {
         Section: Tweaks
         Depends: mobilesubstrate
         """ + "\n"
-        let tweak = """
-        #import <UIKit/UIKit.h>
+        let tweak: String
+        if request.hookClassNames.isEmpty {
+            tweak = """
+            #import <UIKit/UIKit.h>
 
-        %hook SpringBoard
+            %hook SpringBoard
 
-        - (void)applicationDidFinishLaunching:(id)application {
-            %orig;
-            // 在这里编写 tweak 逻辑
+            - (void)applicationDidFinishLaunching:(id)application {
+                %orig;
+                // 在这里编写 tweak 逻辑
+            }
+
+            %end
+            """ + "\n"
+        } else {
+            tweak = TweakDraftService.tweakSource(classNames: request.hookClassNames)
         }
-
-        %end
-        """ + "\n"
         try makefile.write(to: destinations[0], atomically: true, encoding: .utf8)
         try control.write(to: destinations[1], atomically: true, encoding: .utf8)
         try tweak.write(to: destinations[2], atomically: true, encoding: .utf8)
+        if request.includeFridaTrace {
+            let frida = directory.appendingPathComponent("trace.js")
+            try TweakDraftService.fridaTraceScript(classNames: request.hookClassNames).write(
+                to: frida,
+                atomically: true,
+                encoding: .utf8
+            )
+        }
         let filter = try PropertyListSerialization.data(
             fromPropertyList: ["Filter": ["Bundles": [bundleID]]],
             format: .xml,

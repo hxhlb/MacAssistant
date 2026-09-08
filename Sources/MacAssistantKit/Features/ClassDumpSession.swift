@@ -18,10 +18,11 @@ public final class ClassDumpSession: ObservableObject {
     @Published public var ok: Bool?
     @Published public var log = ""
     @Published public var headers = ""
+    @Published public var classNames: [String] = []
 
     public init() {}
 
     public var hasPersistedResult: Bool {
-        !log.isEmpty || !headers.isEmpty
+        !log.isEmpty || !headers.isEmpty || !classNames.isEmpty
     }
 }

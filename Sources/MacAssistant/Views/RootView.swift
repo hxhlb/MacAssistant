@@ -4,6 +4,7 @@ import MacAssistantKit
 
 struct RootView: View {
     @State private var selection: SidebarItem?
+    @FocusState private var sidebarFocused: Bool
     @StateObject private var workspace: WorkspaceStore
     @StateObject private var updates = UpdateCoordinator()
     @StateObject private var ipaInjectionJob = IpaInjectionJob()
@@ -11,6 +12,51 @@ struct RootView: View {
     @State private var ipaTab: IpaView.Tab = .transfer
     /// 语言一变就换掉整棵子树的 identity,让所有 `L(...)` 重新取词条。
     @AppStorage(LocalizationSettings.defaultsKey) private var language = AppLanguage.system.rawValue
+    @AppStorage(SceneBackdropSettings.defaultsKey) private var sceneRaw = SceneBackdropID.system.rawValue
+    @AppStorage(SceneBackdropSettings.motionDefaultsKey) private var sceneMotion = true
+    @AppStorage(AppearancePreference.defaultsKey) private var appearanceRaw = AppearancePreference.system.rawValue
+    @AppStorage(SidebarAppearance.defaultsKey) private var sidebarRaw = SidebarAppearance.material.rawValue
+    @AppStorage(IconAppearance.defaultsKey) private var iconRaw = IconAppearance.monochrome.rawValue
+    @AppStorage(IconAppearance.colorSeedDefaultsKey) private var iconColorSeed = 0
+    @SwiftUI.Environment(\.colorScheme) private var colorScheme
+    @SwiftUI.Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var scene: SceneBackdropID {
+        SceneBackdropID.resolved(sceneRaw)
+    }
+
+    private var sidebarAppearance: SidebarAppearance {
+        SidebarAppearance.resolved(sidebarRaw)
+    }
+
+    private var iconAppearance: IconAppearance {
+        IconAppearance.resolved(iconRaw)
+    }
+
+    private var recipe: SceneBackdropRecipe {
+        scene.recipe(dark: colorScheme == .dark || scene.prefersDarkAppearance)
+    }
+
+    private var sceneAnimated: Bool {
+        sceneMotion && scene.isDecorative && !reduceMotion && !reduceTransparency
+    }
+
+    private var preferredScheme: ColorScheme? {
+        if scene.prefersDarkAppearance { return .dark }
+        switch AppearancePreference.resolved(appearanceRaw).prefersDark {
+        case .none: return nil
+        case .some(true): return .dark
+        case .some(false): return .light
+        }
+    }
+
+    private var sidebarChrome: SidebarChromePolicy {
+        sidebarAppearance.chrome(
+            decorativeScene: scene.isDecorative,
+            reduceTransparency: reduceTransparency
+        )
+    }
 
     init(initialSelection: SidebarItem = .dashboard) {
         _selection = State(initialValue: initialSelection)
@@ -35,30 +81,52 @@ struct RootView: View {
                     Spacer()
                 }
                 .padding(.horizontal, 14)
-                .padding(.top, 12)
+                .padding(.top, 4)
                 .padding(.bottom, 8)
 
-                // 原生 selection 支持非活动窗口首击切换；颜色由 List 自己的 accentColor 覆盖。
-                List(selection: $selection) {
-                    sidebarSection(
-                        L("root.section.daily"),
-                        items: [.dashboard, .repair, .cleanup, .memory, .network, .cheatsheet, .recipes]
-                    )
-                    sidebarSection(
-                        L("root.section.developer"),
-                        items: [.deb, .dylib, .ipa, .macApp, .binary]
-                    )
-                    sidebarSection(
-                        L("root.section.support"),
-                        items: [.environment, .about, .opensource]
-                    )
+                // 不用 List：即使关掉 selection，源列表点下去仍会跟手铺一层非圆角系统蓝。
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        sidebarSection(
+                            L("root.section.daily"),
+                            items: [.dashboard, .repair, .cleanup, .desktopIcons, .appClone, .memory, .network, .cheatsheet, .recipes]
+                        )
+                        sidebarSection(
+                            L("root.section.developer"),
+                            items: [.deb, .dylib, .ipa, .macApp, .binary]
+                        )
+                        sidebarSection(
+                            L("root.section.support"),
+                            items: [.environment, .about, .opensource]
+                        )
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .listStyle(.sidebar)
+                .focused($sidebarFocused)
+                .onMoveCommand(perform: moveSidebarSelection)
+                .modifier(SidebarFocusChrome())
+            }
+            .background {
+                if scene.isDecorative {
+                    windowScene.ignoresSafeArea()
+                }
             }
             .navigationSplitViewColumnWidth(min: 210, ideal: 228, max: 280)
         } detail: {
             detail
         }
+        .background {
+            WindowSceneChrome(
+                immersive: scene.isDecorative,
+                chrome: sidebarChrome,
+                recipe: scene.isDecorative ? recipe : nil,
+                animated: sceneAnimated,
+                reduceTransparency: reduceTransparency
+            )
+        }
+        .toolbarBackground(.hidden, for: .windowToolbar)
         .onReceive(workspace.$requestedDestination) { destination in
             guard let destination else { return }
             selection = destination.sidebarItem
@@ -77,75 +145,103 @@ struct RootView: View {
         } message: { info in
             Text(updates.alertMessage(for: info))
         }
+        .environment(\.sceneBackdrop, scene)
+        .preferredColorScheme(preferredScheme)
         .id(language)
+    }
+
+    @ViewBuilder
+    private var windowScene: some View {
+        if scene.isDecorative {
+            WindowAlignedBackdrop(
+                recipe: scene.recipe(dark: colorScheme == .dark || scene.prefersDarkAppearance),
+                animated: sceneAnimated,
+                reduceTransparency: reduceTransparency,
+                showsVeil: false
+            )
+        }
     }
 
     private func row(_ item: SidebarItem) -> some View {
         let selected = (selection ?? .dashboard) == item
-        return HStack(spacing: 6) {
-            Label(item.title, systemImage: item.icon)
-                .foregroundStyle(selected ? AnyShapeStyle(Color.appAccent) : AnyShapeStyle(.primary))
-            Spacer(minLength: 4)
-        }
-        .font(.body.weight(selected ? .medium : .regular))
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
-        .background(SidebarSelectionAppearance())
-        .background {
-            if selected {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(Color.appAccent.opacity(0.12))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .strokeBorder(Color.appAccent.opacity(0.18))
-                    }
+        let iconTint: Color = {
+            if let rgb = iconAppearance.rgb {
+                return Color(red: rgb.0, green: rgb.1, blue: rgb.2)
             }
+            if iconAppearance == .color {
+                let rgb = SidebarIconShuffle.rgb(for: item, seed: iconColorSeed)
+                return Color(red: rgb.0, green: rgb.1, blue: rgb.2)
+            }
+            return Color.primary
+        }()
+        return Button {
+            selection = item
+            sidebarFocused = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: item.icon)
+                    .symbolRenderingMode(iconAppearance.usesHierarchicalColor ? .hierarchical : .monochrome)
+                    .foregroundStyle(iconTint)
+                    .frame(width: 18, alignment: .center)
+                Text(item.title)
+                    .foregroundStyle(Color.primary)
+                Spacer(minLength: 4)
+            }
+            .font(.body)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .tag(item)
+        .buttonStyle(QuietRowButtonStyle(selected: selected))
         .accessibilityLabel(item.title)
         .accessibilityHint(L("root.accessibility.open", item.title))
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
         .accessibilityValue(selected ? L("root.accessibility.selected") : "")
         .accessibilityIdentifier("sidebar.\(item.rawValue)")
     }
 
-    /// List 继续负责首击选择和键盘导航，只关掉 AppKit 强制绘制的系统蓝色底。
-    private struct SidebarSelectionAppearance: NSViewRepresentable {
-        func makeNSView(context: Context) -> NSView { NSView() }
-
-        func updateNSView(_ view: NSView, context: Context) {
-            DispatchQueue.main.async {
-                var ancestor = view.superview
-                while let current = ancestor {
-                    if let table = current as? NSTableView {
-                        table.selectionHighlightStyle = .none
-                        return
-                    }
-                    ancestor = current.superview
-                }
-            }
+    private func moveSidebarSelection(_ direction: MoveCommandDirection) {
+        let items = SidebarItem.allCases
+        let current = selection ?? .dashboard
+        guard let index = items.firstIndex(of: current) else { return }
+        switch direction {
+        case .up where index > 0:
+            selection = items[index - 1]
+        case .down where index + 1 < items.count:
+            selection = items[index + 1]
+        default:
+            break
         }
     }
 
     private func sidebarSection(_ title: String, items: [SidebarItem]) -> some View {
-        Section(title) {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.top, 4)
+                .padding(.bottom, 2)
             ForEach(items) { item in
                 row(item)
             }
+            .animation(nil, value: selection)
         }
     }
 
     @ViewBuilder
     private var detail: some View {
         switch (selection ?? .dashboard).destination {
-        case .dashboard: DashboardView()
-        case .repair: RepairView()
+        case .dashboard: DashboardView(workspace: workspace)
+        case .repair: RepairView(workspace: workspace)
         case .cleanup: CleanupView()
+        case .desktopIcons: DesktopIconView()
+        case .appClone: AppCloneView(workspace: workspace)
         case .memory: MemoryView()
         case .network: NetworkView()
-        case .cheatsheet: CheatsheetView()
-        case .recipes: RecipesView()
+        case .cheatsheet: CheatsheetView(workspace: workspace)
+        case .recipes: RecipesView(workspace: workspace)
         case .deb: DebView(workspace: workspace)
         case .dylib: DylibView(workspace: workspace)
         case .ipa: IpaView(
@@ -154,7 +250,7 @@ struct RootView: View {
             workspace: workspace,
             tab: $ipaTab
         )
-        case .macApp: MacAppView()
+        case .macApp: MacAppView(workspace: workspace)
         case .binary: BinaryView()
         case .environment: EnvironmentView()
         case .about: AboutView(updates: updates)

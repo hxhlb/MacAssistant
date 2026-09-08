@@ -17,7 +17,7 @@ public enum MemoryPressureLevel: String, Sendable {
     }
 }
 
-public struct MemorySnapshot: Sendable {
+public struct MemorySnapshot: Sendable, Equatable {
     public let physical: UInt64
     public let used: UInt64
     public let cached: UInt64
@@ -47,6 +47,17 @@ public struct MemorySnapshot: Sendable {
         self.capturedAt = capturedAt
     }
 
+    /// 实时刷新只比较测量值，忽略采样时刻，避免每 2 秒无意义重绘。
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.physical == rhs.physical
+            && lhs.used == rhs.used
+            && lhs.cached == rhs.cached
+            && lhs.compressed == rhs.compressed
+            && lhs.swapUsed == rhs.swapUsed
+            && lhs.pressureFreePercent == rhs.pressureFreePercent
+            && lhs.pressureLevel == rhs.pressureLevel
+    }
+
     /// 进度条用系统已用 / 物理内存，和活动监视器「内存已用」同一口径，不用 free%。
     public var usedFraction: Double {
         guard physical > 0 else { return 0 }
@@ -66,10 +77,16 @@ public struct ProcessMemoryInfo: Identifiable, Hashable, Sendable {
     public let footprintBytes: UInt64
     public let executablePath: String
     public let displayName: String
+    /// `ps` 的 comm：Electron 会改成带窗口/工作区的名称，例如 `extension-host Mac小助手`。
+    public let processTitle: String
 
     public var id: Int32 { pid }
     public var name: String {
         ProcessDisplayNameResolver.executableName(executablePath)
+    }
+    /// 超出 App / 可执行文件名的部分，用来区分同一个 App 的多个窗口。
+    public var remark: String? {
+        Self.remark(processTitle: processTitle, displayName: displayName, executableName: name)
     }
     /// 列表排序和占比使用的占用：优先 footprint，否则 RSS。
     public var memoryBytes: UInt64 {
@@ -85,13 +102,15 @@ public struct ProcessMemoryInfo: Identifiable, Hashable, Sendable {
         rssBytes: UInt64,
         executablePath: String,
         footprintBytes: UInt64 = 0,
-        displayName: String? = nil
+        displayName: String? = nil,
+        processTitle: String = ""
     ) {
         self.pid = pid
         self.userID = userID
         self.rssBytes = rssBytes
         self.footprintBytes = footprintBytes
         self.executablePath = executablePath
+        self.processTitle = processTitle
         let fallback = ProcessDisplayNameResolver.executableName(executablePath)
         if let displayName, !displayName.isEmpty {
             self.displayName = displayName
@@ -107,14 +126,43 @@ public struct ProcessMemoryInfo: Identifiable, Hashable, Sendable {
         if displayName.localizedCaseInsensitiveContains(needle) { return true }
         if name.localizedCaseInsensitiveContains(needle) { return true }
         if executablePath.localizedCaseInsensitiveContains(needle) { return true }
+        if !processTitle.isEmpty, processTitle.localizedCaseInsensitiveContains(needle) { return true }
+        if let remark, remark.localizedCaseInsensitiveContains(needle) { return true }
         if let bundle = applicationBundlePath, bundle.localizedCaseInsensitiveContains(needle) {
             return true
         }
         return false
     }
+
+    public static func remark(processTitle: String, displayName: String, executableName: String) -> String? {
+        let title = processTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, !title.hasPrefix("/") else { return nil }
+
+        let names = [executableName, displayName]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        for name in names {
+            if title.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+                return nil
+            }
+            guard let range = title.range(of: name, options: [.caseInsensitive, .diacriticInsensitive]),
+                  range.lowerBound == title.startIndex
+            else { continue }
+            let rest = title[range.upperBound...]
+                .drop(while: { $0 == ":" || $0.isWhitespace })
+            let trimmed = String(rest).trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        return title
+    }
 }
 
 public enum ProcessDisplayNameResolver {
+    private static let cacheLock = NSLock()
+    private static var cache: [String: String] = [:]
+    private static let maximumCachedNames = 256
+
     public static func executableName(_ path: String) -> String {
         let component = URL(fileURLWithPath: path).lastPathComponent
         return component.isEmpty ? path : component
@@ -122,9 +170,28 @@ public enum ProcessDisplayNameResolver {
 
     /// 给短二进制名补上 App 名称，避免 IDA 只显示 `ida`、搜索「IDA Professional」找不到。
     public static func displayName(executablePath: String) -> String {
+        cacheLock.lock()
+        if let cached = cache[executablePath] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
+        let resolved = resolveDisplayName(executablePath: executablePath)
+        cacheLock.lock()
+        if cache.count >= maximumCachedNames {
+            cache.removeAll(keepingCapacity: true)
+        }
+        cache[executablePath] = resolved
+        cacheLock.unlock()
+        return resolved
+    }
+
+    private static func resolveDisplayName(executablePath: String) -> String {
         let fallback = executableName(executablePath)
         let bundles = ProcessApplicationResolver.applicationBundlePaths(forExecutablePath: executablePath)
-        guard let bundlePath = bundles.last else { return fallback }
+        // 嵌套 Helper 用最外层宿主名（Cursor），窗口差异放在 processTitle 备注里。
+        guard let bundlePath = bundles.first else { return fallback }
 
         let folderName = appFolderName(bundlePath)
         if let plistName = infoPlistName(bundlePath), !plistName.isEmpty {
@@ -354,18 +421,21 @@ public enum MemoryService {
         let result = try Shell.run("/bin/ps", ["-axo", "pid=,uid=,rss=,comm="])
         guard result.succeeded else { throw MemoryServiceError.commandFailed(result.combinedOutput) }
         return parsePS(result.stdout, currentUserID: currentUserOnly ? getuid() : nil)
-            .map { process in
+            .compactMap { process -> ProcessMemoryInfo? in
                 let path = processExecutablePath(pid: process.pid) ?? process.executablePath
+                let footprint = processMemoryFootprint(pid: process.pid) ?? 0
+                let memory = footprint > 0 ? footprint : process.rssBytes
+                guard memory > 0 else { return nil }
                 return ProcessMemoryInfo(
                     pid: process.pid,
                     userID: process.userID,
                     rssBytes: process.rssBytes,
                     executablePath: path,
-                    footprintBytes: processMemoryFootprint(pid: process.pid) ?? 0,
-                    displayName: ProcessDisplayNameResolver.displayName(executablePath: path)
+                    footprintBytes: footprint,
+                    displayName: ProcessDisplayNameResolver.displayName(executablePath: path),
+                    processTitle: process.processTitle
                 )
             }
-            .filter { $0.memoryBytes > 0 }
             .sorted(by: Self.isHigherMemoryUsage)
     }
 
@@ -457,7 +527,13 @@ public enum MemoryService {
             else { return nil }
             let path = String(columns[3]).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !path.isEmpty else { return nil }
-            return ProcessMemoryInfo(pid: pid, userID: uid, rssBytes: rssKB * 1024, executablePath: path)
+            return ProcessMemoryInfo(
+                pid: pid,
+                userID: uid,
+                rssBytes: rssKB * 1024,
+                executablePath: path,
+                processTitle: path
+            )
         }
         .sorted(by: isHigherMemoryUsage)
     }

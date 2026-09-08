@@ -81,6 +81,10 @@ private struct TheosProjectMaker: View {
     @State private var dependencyCommand = ""
     @State private var showDependencyConfirmation = false
     @State private var dependencyInstalling = false
+    @State private var hookClassNames: [String] = []
+    @State private var hookSourceName = ""
+    @State private var includeFridaTrace = true
+    @State private var analyzingHooks = false
 
     var body: some View {
         Card {
@@ -156,6 +160,27 @@ private struct TheosProjectMaker: View {
                             .glassActionButtonStyle(prominent: true)
                     }
                     PathBadge(url: newProjectDirectory)
+                    HStack {
+                        FilePickerButton(
+                            title: L("theos.draft.fromBinary"),
+                            systemImage: "curlybraces.square"
+                        ) { analyzeBinary($0) }
+                        if analyzingHooks {
+                            ProgressView().controlSize(.small)
+                        }
+                        if !hookClassNames.isEmpty {
+                            Text(L("theos.draft.classCount", hookClassNames.count, hookSourceName))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button(L("theos.draft.clear")) {
+                                hookClassNames = []
+                                hookSourceName = ""
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        Toggle(L("theos.draft.includeFrida"), isOn: $includeFridaTrace)
+                        Spacer()
+                    }
                     Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 9) {
                         GridRow {
                             Text("名称").foregroundStyle(.secondary)
@@ -183,7 +208,7 @@ private struct TheosProjectMaker: View {
                                 .gridCellColumns(3)
                         }
                     }
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.soft)
                 }
             }
         }
@@ -257,7 +282,9 @@ private struct TheosProjectMaker: View {
                     description: projectDescription,
                     targetBundleID: targetBundleID,
                     minimumIOS: minimumIOS,
-                    layout: projectLayout
+                    layout: projectLayout,
+                    hookClassNames: hookClassNames,
+                    includeFridaTrace: includeFridaTrace && !hookClassNames.isEmpty
                 )
             )
             self.newProjectDirectory = nil
@@ -265,6 +292,39 @@ private struct TheosProjectMaker: View {
         } catch {
             ok = false
             log = error.localizedDescription
+        }
+    }
+
+    private func analyzeBinary(_ url: URL) {
+        analyzingHooks = true
+        hookSourceName = url.lastPathComponent
+        Task {
+            do {
+                let names = try await Task.detached {
+                    try FileSystemHelper.withSecurityScopedAccess(to: [url]) {
+                        let targets = try TweakDraftService.dumpTargets(from: url)
+                        guard let target = targets.first else { return [String]() }
+                        return try ClassDumpService.dump(
+                            fileAt: target,
+                            preferExternal: false,
+                            allowExternalFallback: true
+                        ).classNames
+                    }
+                }.value
+                hookClassNames = TweakDraftService.selectClassNames(names).accepted
+                if hookClassNames.isEmpty {
+                    ok = false
+                    log = L("theos.draft.noneFound")
+                } else {
+                    ok = true
+                    log = L("theos.draft.ready", hookClassNames.count, hookSourceName)
+                }
+            } catch {
+                hookClassNames = []
+                ok = false
+                log = error.localizedDescription
+            }
+            analyzingHooks = false
         }
     }
 
@@ -877,7 +937,7 @@ private struct DebPackageWizard: View {
                             .gridCellColumns(3)
                     }
                 }
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.soft)
 
                 Divider()
 
@@ -983,7 +1043,7 @@ private struct DebPackageWizard: View {
                         TextField("如 1854.0, 3000.0", text: $filterCFVersions)
                     }
                 }
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.soft)
                 .disabled(!autoFilter)
             }
         }

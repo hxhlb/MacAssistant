@@ -119,9 +119,373 @@ struct FeatureScaffold<Content: View, Trailing: View>: View {
     }
 }
 
+extension View {
+    @ViewBuilder
+    func clearListRowIf(_ enabled: Bool) -> some View {
+        if enabled {
+            listRowBackground(Color.clear)
+        } else {
+            self
+        }
+    }
+
+    /// 关掉 AppKit 列表的系统蓝选中底，改由 SwiftUI 自己画毛玻璃。
+    func disableSystemListSelection() -> some View {
+        background(DisableListSelectionHighlight())
+    }
+}
+
+struct SidebarFocusChrome: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 14.0, *) {
+            content.focusable().focusEffectDisabled()
+        } else {
+            content.focusable()
+        }
+    }
+}
+
+/// 自己画选中；不用 ButtonStyle 的 isPressed，避免松手后旧行还留着灰底。
+struct QuietRowButtonStyle: PrimitiveButtonStyle {
+    var selected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background {
+                SidebarSelectionChrome(selected: selected)
+                    .transaction { $0.animation = nil }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .onTapGesture(perform: configuration.trigger)
+    }
+}
+
+/// 侧栏选中底：一层浅灰，瞬时切换，不描边、不叠材质。
+struct SidebarSelectionChrome: View {
+    let selected: Bool
+    @SwiftUI.Environment(\.sceneBackdrop) private var scene
+    @SwiftUI.Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        if selected {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(fill)
+        } else {
+            Color.clear
+        }
+    }
+
+    private var fill: Color {
+        let dark = colorScheme == .dark
+        if scene.isDecorative {
+            return Color.primary.opacity(dark ? 0.18 : 0.10)
+        }
+        return Color.primary.opacity(dark ? 0.14 : 0.07)
+    }
+}
+
+/// 系统源列表选中会用「控制强调色」铺蓝，并把行内容反成白。
+/// SwiftUI 每次刷新还可能把 `selectionHighlightStyle` 设回去，所以要点下去的当帧就关掉。
+private struct DisableListSelectionHighlight: NSViewRepresentable {
+    func makeNSView(context: Context) -> SelectionHighlightProbe {
+        SelectionHighlightProbe()
+    }
+
+    func updateNSView(_ view: SelectionHighlightProbe, context: Context) {
+        view.apply()
+    }
+}
+
+private final class SelectionHighlightProbe: NSView {
+    private var observers: [NSObjectProtocol] = []
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        listen()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        listen()
+    }
+
+    deinit {
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        apply()
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        apply()
+    }
+
+    private func listen() {
+        let center = NotificationCenter.default
+        let handler: (Notification) -> Void = { [weak self] note in
+            guard let table = note.object as? NSTableView, self?.nearestTable() === table else { return }
+            self?.sanitize(table)
+        }
+        observers.append(contentsOf: [
+            center.addObserver(forName: NSTableView.selectionIsChangingNotification, object: nil, queue: .main, using: handler),
+            center.addObserver(forName: NSTableView.selectionDidChangeNotification, object: nil, queue: .main, using: handler)
+        ])
+    }
+
+    func apply() {
+        if let table = nearestTable() {
+            sanitize(table)
+        }
+    }
+
+    private func nearestTable() -> NSTableView? {
+        var ancestor = superview
+        while let current = ancestor {
+            if let table = current as? NSTableView { return table }
+            for subview in current.subviews {
+                if let table = subview as? NSTableView { return table }
+            }
+            ancestor = current.superview
+        }
+        return nil
+    }
+
+    private func sanitize(_ table: NSTableView) {
+        if table.selectionHighlightStyle != .none {
+            table.selectionHighlightStyle = .none
+        }
+        for row in 0..<table.numberOfRows {
+            guard let rowView = table.rowView(atRow: row, makeIfNecessary: false) else { continue }
+            if rowView.selectionHighlightStyle != .none {
+                rowView.selectionHighlightStyle = .none
+            }
+            if rowView.isEmphasized {
+                rowView.isEmphasized = false
+            }
+            if rowView.backgroundColor != .clear {
+                rowView.backgroundColor = .clear
+            }
+        }
+    }
+}
+
+extension SidebarItem {
+    var iconColor: Color {
+        switch self {
+        case .dashboard: return .teal
+        case .repair: return .orange
+        case .cleanup: return .red
+        case .desktopIcons: return .blue
+        case .appClone: return .indigo
+        case .memory: return .purple
+        case .network: return .cyan
+        case .cheatsheet: return Color(nsColor: .secondaryLabelColor)
+        case .recipes: return .mint
+        case .deb: return .brown
+        case .dylib: return .orange
+        case .ipa: return .pink
+        case .macApp: return .blue
+        case .binary: return .purple
+        case .environment: return .green
+        case .about: return .teal
+        case .opensource: return .gray
+        }
+    }
+}
+
 extension FeatureScaffold where Trailing == EmptyView {
     init(title: String, subtitle: String, @ViewBuilder content: @escaping () -> Content) {
         self.init(title: title, subtitle: subtitle, content: content, trailing: { EmptyView() })
+    }
+}
+
+enum PrivacySettingsOpener {
+    @discardableResult
+    static func open(anchor: String) -> Bool {
+        for url in PermissionGuide.settingsURLs(anchor: anchor) {
+            if NSWorkspace.shared.open(url) { return true }
+        }
+        return false
+    }
+}
+
+struct PermissionGuideCard: View {
+    let needs: [PermissionNeed]
+    @State private var snapshot = PermissionGuideCardCache.snapshot ?? PermissionStatusSnapshot()
+
+    private var visible: [PermissionNeed] {
+        PermissionGuide.visibleNeeds(needs, snapshot: snapshot)
+    }
+
+    var body: some View {
+        Group {
+            if !visible.isEmpty {
+                Card {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label(L("permission.card.title"), systemImage: "lock.shield")
+                            .font(.headline)
+                        Text(L("permission.card.subtitle"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ForEach(visible) { need in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Text(need.title)
+                                        .font(.callout.weight(.semibold))
+                                    if need.isOptional {
+                                        Text(L("permission.optional"))
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 8)
+                                    if let anchor = need.settingsAnchor {
+                                        Button(L("permission.openSettings")) {
+                                            PrivacySettingsOpener.open(anchor: anchor)
+                                        }
+                                        .buttonStyle(.borderless)
+                                    }
+                                }
+                                Text(L("permission.usedBy", need.usedBy))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(L("permission.withoutIt", need.withoutIt))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if need.id != visible.last?.id {
+                                Divider()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear(perform: refresh)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refresh()
+        }
+    }
+
+    private func refresh() {
+        Task.detached(priority: .utility) {
+            let next = PermissionStatusProbe.live.snapshot()
+            await MainActor.run {
+                PermissionGuideCardCache.snapshot = next
+                snapshot = next
+            }
+        }
+    }
+}
+
+private enum PermissionGuideCardCache {
+    static var snapshot: PermissionStatusSnapshot?
+}
+
+struct ToolFinderCard: View {
+    @ObservedObject var workspace: WorkspaceStore
+    @State private var query = ""
+
+    private var hits: [ToolFindHit] {
+        ToolFinder.search(query)
+    }
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(L("toolfinder.title")).font(.headline)
+                TextField(L("toolfinder.prompt"), text: $query)
+                    .textFieldStyle(.soft)
+                if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(L("toolfinder.hint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if hits.isEmpty {
+                    Text(L("toolfinder.empty"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(hits) { hit in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(hit.title)
+                                        .font(.callout.weight(.medium))
+                                    Text(hit.kindLabel)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text(hit.detail)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                            Spacer(minLength: 8)
+                            CopyButton(text: hit.copyText, label: L("theme.copy"))
+                                .labelStyle(.iconOnly)
+                            Button(L("toolfinder.open")) {
+                                workspace.request(hit.destination, searchQuery: hit.searchQuery)
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct UsageSparkline: View {
+    let values: [Double]
+    var tint: Color = .accentColor
+
+    var body: some View {
+        Canvas { context, size in
+            guard values.count > 1, size.width > 1, size.height > 1 else { return }
+            let points = scaledPoints(in: size)
+            guard let first = points.first, let last = points.last else { return }
+
+            var fill = Path()
+            fill.move(to: CGPoint(x: first.x, y: size.height))
+            for point in points {
+                fill.addLine(to: point)
+            }
+            fill.addLine(to: CGPoint(x: last.x, y: size.height))
+            fill.closeSubpath()
+            context.fill(fill, with: .color(tint.opacity(0.16)))
+
+            var line = Path()
+            line.addLines(points)
+            context.stroke(line, with: .color(tint), style: StrokeStyle(lineWidth: 1.4, lineJoin: .round))
+        }
+        .padding(.horizontal, 5)
+        .padding(.vertical, 3)
+        .frame(width: 72, height: 22)
+        .background(tint.opacity(0.07), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+        .accessibilityHidden(true)
+        .help(L("dashboard.sparkline.help"))
+    }
+
+    /// 按近期高低点缩放，避免低占用贴底、高占用贴顶。
+    private func scaledPoints(in size: CGSize) -> [CGPoint] {
+        let samples = values.map { min(1, max(0, $0)) }
+        let lowest = samples.min() ?? 0
+        let highest = samples.max() ?? 1
+        let span = max(highest - lowest, 0.06)
+        let center = (lowest + highest) / 2
+        let floor = center - span / 2
+        let ceiling = center + span / 2
+        return samples.enumerated().map { index, value in
+            let x = size.width * CGFloat(index) / CGFloat(samples.count - 1)
+            let t = (value - floor) / (ceiling - floor)
+            let y = size.height * (1 - CGFloat(min(1, max(0, t))))
+            return CGPoint(x: x, y: y)
+        }
     }
 }
 

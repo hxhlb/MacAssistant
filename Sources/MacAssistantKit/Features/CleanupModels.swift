@@ -15,8 +15,8 @@ public struct CleanupSessionState: Equatable, Sendable {
     public private(set) var selectedIDs: Set<String>
     public private(set) var requiresRescan = false
 
-    private let targetIDs: Set<String>
-    private let defaultSelectedIDs: Set<String>
+    private var targetIDs: Set<String>
+    private var defaultSelectedIDs: Set<String>
 
     public init(targetIDs: Set<String>, defaultSelectedIDs: Set<String>) {
         self.targetIDs = targetIDs
@@ -63,6 +63,19 @@ public struct CleanupSessionState: Equatable, Sendable {
 
     /// 用给定集合替换当前选择（自动裁剪到已知目标；忙碌时忽略）。
     public mutating func replaceSelection(with ids: Set<String>) {
+        guard !isBusy else { return }
+        selectedIDs = ids.intersection(targetIDs)
+    }
+
+    /// 扫描展开动态项后登记可选 ID；新 ID 默不勾选，已失效的选择会被裁掉。
+    public mutating func updateKnownTargets(_ ids: Set<String>) {
+        targetIDs = ids
+        selectedIDs.formIntersection(ids)
+        defaultSelectedIDs.formIntersection(ids)
+    }
+
+    /// 只勾可再生项。传入的集合会再裁到已知目标。
+    public mutating func selectSafe(_ ids: Set<String>) {
         guard !isBusy else { return }
         selectedIDs = ids.intersection(targetIDs)
     }
@@ -115,13 +128,18 @@ public enum CleanupRisk: String, Equatable, Sendable {
 
 /// 清理目标的归类，只影响界面分组呈现，不参与任何路径校验或执行逻辑。
 public enum CleanupCategory: String, Equatable, Sendable, CaseIterable {
+    /// 访达「系统数据」口径：用户/容器缓存（≥100 MB 单独成行，其余折一行），以及备份 / SDK / 模型等主目录大户。
+    case systemData
     case system
+    case apps
     case xcode
     case packageManager
 
     public var label: String {
         switch self {
+        case .systemData: return L("cleanup.category.system-data")
         case .system: return L("cleanup.category.system")
+        case .apps: return L("cleanup.category.apps")
         case .xcode: return L("cleanup.category.xcode")
         case .packageManager: return L("cleanup.category.package-manager")
         }
@@ -129,10 +147,40 @@ public enum CleanupCategory: String, Equatable, Sendable, CaseIterable {
 
     public var systemImage: String {
         switch self {
+        case .systemData: return "internaldrive.fill"
         case .system: return "macwindow"
+        case .apps: return "safari"
         case .xcode: return "hammer"
         case .packageManager: return "shippingbox"
         }
+    }
+}
+
+/// 删之前给人看的三句话：会去掉什么、会留下什么、删完会怎样。
+public struct CleanupSafetyDetails: Equatable, Sendable {
+    public let removes: String
+    public let keeps: String
+    public let note: String
+
+    public init(removes: String, keeps: String, note: String) {
+        self.removes = removes
+        self.keeps = keeps
+        self.note = note
+    }
+}
+
+/// 一行展开后看到的最大子项，只用于展示，不参与删除。
+public struct CleanupBreakdownEntry: Equatable, Identifiable, Sendable {
+    public let name: String
+    public let bytes: Int64
+    public let url: URL
+
+    public var id: String { url.standardizedFileURL.path }
+
+    public init(name: String, bytes: Int64, url: URL) {
+        self.name = name
+        self.bytes = bytes
+        self.url = url
     }
 }
 
@@ -153,6 +201,7 @@ public struct CleanupTargetDefinition: Identifiable, Equatable, Sendable {
     public let defaultSelected: Bool
     public let category: CleanupCategory
     public let systemImage: String
+    public let safetyDetails: CleanupSafetyDetails?
 
     public init(
         id: String,
@@ -163,7 +212,8 @@ public struct CleanupTargetDefinition: Identifiable, Equatable, Sendable {
         action: CleanupAction,
         defaultSelected: Bool,
         category: CleanupCategory = .system,
-        systemImage: String = "folder"
+        systemImage: String = "folder",
+        safetyDetails: CleanupSafetyDetails? = nil
     ) {
         self.id = id
         self.name = name
@@ -174,6 +224,7 @@ public struct CleanupTargetDefinition: Identifiable, Equatable, Sendable {
         self.defaultSelected = defaultSelected
         self.category = category
         self.systemImage = systemImage
+        self.safetyDetails = safetyDetails
     }
 
     public var isSelectable: Bool {
@@ -226,7 +277,7 @@ public struct CleanupProgress: Equatable, Sendable {
     }
 }
 
-public struct CleanupFileIdentity: Equatable, Sendable {
+public struct CleanupFileIdentity: Equatable, Hashable, Sendable {
     public let device: UInt64
     public let inode: UInt64
 

@@ -1,5 +1,5 @@
 public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable {
-    case dashboard, repair, cleanup, memory, network, cheatsheet, recipes
+    case dashboard, repair, cleanup, desktopIcons, appClone, memory, network, cheatsheet, recipes
     case deb, dylib, ipa, macApp, binary
     case environment, about, opensource
 
@@ -14,6 +14,8 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
         case .dashboard: return "gauge.with.dots.needle.67percent"
         case .repair: return "bandage"
         case .cleanup: return "trash"
+        case .desktopIcons: return "paintpalette"
+        case .appClone: return "rectangle.on.rectangle"
         case .memory: return "memorychip"
         case .network: return "network"
         case .cheatsheet: return "terminal"
@@ -34,6 +36,8 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
         case .dashboard: return .dashboard
         case .repair: return .repair
         case .cleanup: return .cleanup
+        case .desktopIcons: return .desktopIcons
+        case .appClone: return .appClone
         case .memory: return .memory
         case .network: return .network
         case .cheatsheet: return .cheatsheet
@@ -51,7 +55,7 @@ public enum SidebarItem: String, CaseIterable, Identifiable, Hashable, Sendable 
 }
 
 public enum AppDestination: String, CaseIterable, Hashable, Sendable {
-    case dashboard, repair, cleanup, memory, network, cheatsheet, recipes
+    case dashboard, repair, cleanup, desktopIcons, appClone, memory, network, cheatsheet, recipes
     case deb, dylib, ipa, macApp, binary
     case environment, about, opensource
 
@@ -60,6 +64,8 @@ public enum AppDestination: String, CaseIterable, Hashable, Sendable {
         case .dashboard: return .dashboard
         case .repair: return .repair
         case .cleanup: return .cleanup
+        case .desktopIcons: return .desktopIcons
+        case .appClone: return .appClone
         case .memory: return .memory
         case .network: return .network
         case .cheatsheet: return .cheatsheet

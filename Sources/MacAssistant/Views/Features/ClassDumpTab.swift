@@ -8,6 +8,7 @@ import MacAssistantKit
 struct ClassDumpTab: View {
     @ObservedObject var session: ClassDumpSession
     @State private var dropTargeted = false
+    @State private var showingDraft = false
 
     private var externalAvailable: Bool {
         ExternalTool.classDump.isAvailable || ExternalTool.dsdump.isAvailable
@@ -59,7 +60,7 @@ struct ClassDumpTab: View {
                         Text(L("classdumptab.architecture"))
                             .frame(width: 110, alignment: .leading)
                         TextField(L("classdumptab.architecture.placeholder"), text: $session.archText)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(.soft)
                             .frame(maxWidth: 300)
                         Spacer()
                     }
@@ -105,6 +106,23 @@ struct ClassDumpTab: View {
                 }
             }
 
+            if !session.classNames.isEmpty {
+                Card {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(L("classdumptab.draft.title")).font(.headline)
+                        Text(L("classdumptab.draft.detail", session.classNames.count))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button {
+                            showingDraft = true
+                        } label: {
+                            Label(L("classdumptab.draft.generate"), systemImage: "hammer")
+                        }
+                        .disabled(session.busy)
+                    }
+                }
+            }
+
             if !session.headers.isEmpty {
                 Card {
                     VStack(alignment: .leading, spacing: 8) {
@@ -117,6 +135,14 @@ struct ClassDumpTab: View {
                     }
                 }
             }
+        }
+        .sheet(isPresented: $showingDraft) {
+            TweakDraftSheet(
+                classNames: session.classNames,
+                suggestedName: session.inputURLs.first?
+                    .deletingPathExtension().lastPathComponent ?? "TweakDraft",
+                suggestedDirectory: session.outputDirectory?.deletingLastPathComponent()
+            )
         }
     }
 
@@ -243,6 +269,7 @@ struct ClassDumpTab: View {
         session.log = ""
         session.ok = nil
         session.facts = nil
+        session.classNames = []
         guard unique.count == 1 else {
             session.inspecting = false
             return
@@ -310,6 +337,7 @@ struct ClassDumpTab: View {
                     }
                     }.value
                     session.headers = pair.0.headers
+                    session.classNames = pair.0.classNames
                     succeeded += 1
                     destinations.append(destination)
                     let engine = pair.0.usedExternalTool
@@ -408,5 +436,86 @@ struct ClassDumpTab: View {
         return FileSystemHelper.uniqueOutputURL(
             basedOn: selected.appendingPathComponent(base, isDirectory: true)
         )
+    }
+}
+
+private struct TweakDraftSheet: View {
+    let classNames: [String]
+    let suggestedName: String
+    let suggestedDirectory: URL?
+
+    @SwiftUI.Environment(\.dismiss) private var dismiss
+    @State private var outputDirectory: URL?
+    @State private var includeTweak = true
+    @State private var includeFrida = true
+    @State private var busy = false
+    @State private var errorMessage = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(L("classdumptab.draft.sheetTitle")).font(.title3.weight(.semibold))
+            Text(L("classdumptab.draft.sheetDetail", classNames.count, TweakDraftService.hookLimit))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                FilePickerButton(
+                    title: L("classdumptab.chooseOutput"),
+                    systemImage: "folder",
+                    chooseDirectory: true
+                ) { outputDirectory = $0 }
+                PathBadge(url: outputDirectory, placeholder: L("classdumptab.noOutput"))
+            }
+            Toggle(L("classdumptab.draft.includeTweak"), isOn: $includeTweak)
+            Toggle(L("classdumptab.draft.includeFrida"), isOn: $includeFrida)
+            if !errorMessage.isEmpty {
+                Text(errorMessage).font(.caption).foregroundStyle(.red)
+            }
+            HStack {
+                Spacer()
+                Button(L("macappview.clone.cancel")) { dismiss() }
+                Button(busy ? L("classdumptab.draft.writing") : L("classdumptab.draft.write")) {
+                    writeDraft()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(busy || outputDirectory == nil || (!includeTweak && !includeFrida))
+            }
+        }
+        .padding(22)
+        .frame(width: 480)
+        .onAppear {
+            if outputDirectory == nil {
+                let base = (suggestedDirectory ?? FileManager.default.homeDirectoryForCurrentUser)
+                    .appendingPathComponent(suggestedName + "-TweakDraft", isDirectory: true)
+                outputDirectory = FileSystemHelper.uniqueOutputURL(basedOn: base)
+            }
+        }
+    }
+
+    private func writeDraft() {
+        guard let outputDirectory else { return }
+        busy = true
+        errorMessage = ""
+        let names = classNames
+        let tweak = includeTweak
+        let frida = includeFrida
+        Task {
+            do {
+                let result = try await Task.detached {
+                    try FileSystemHelper.withSecurityScopedAccess(to: [outputDirectory]) {
+                        try TweakDraftService.write(
+                            classNames: names,
+                            to: outputDirectory,
+                            includeTweak: tweak,
+                            includeFrida: frida
+                        )
+                    }
+                }.value
+                revealInFinder(result.directory)
+                dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+                busy = false
+            }
+        }
     }
 }

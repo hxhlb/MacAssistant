@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import MacAssistantKit
 
 // MARK: - Liquid Glass 兼容层
 //
@@ -26,11 +28,27 @@ private struct ContentSurfaceBackground<S: InsettableShape>: ViewModifier {
     let fill: Color
     let stroke: Color?
 
+    @SwiftUI.Environment(\.sceneBackdrop) private var scene
+    @SwiftUI.Environment(\.colorScheme) private var colorScheme
+    @SwiftUI.Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
     func body(content: Content) -> some View {
+        let decorative = scene.isDecorative && !reduceTransparency
+        let recipe = scene.recipe(dark: colorScheme == .dark || scene.prefersDarkAppearance)
+        let opacity = min(0.18, recipe.cardOpacity * 0.36)
         content
-            .background(shape.fill(fill))
+            .background(shape.fill(decorative ? AnyShapeStyle(.ultraThinMaterial) : AnyShapeStyle(fill)))
+            .background {
+                if decorative {
+                    shape.fill(fill.opacity(opacity))
+                }
+            }
             .overlay {
-                if let stroke { shape.strokeBorder(stroke) }
+                if decorative {
+                    shape.strokeBorder(Color.primary.opacity(0.12))
+                } else if let stroke {
+                    shape.strokeBorder(stroke)
+                }
             }
     }
 }
@@ -43,7 +61,7 @@ private struct InsetSurfaceBackground<S: InsettableShape>: ViewModifier {
     let glassFill: AnyShapeStyle
     let stroke: Color?
 
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @SwiftUI.Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     func body(content: Content) -> some View {
         content
@@ -139,18 +157,199 @@ extension View {
         self
 #endif
     }
+
+    /// 装饰背景下去掉 List 自带的不透明底板，让场景透出来。
+    func sceneListChrome() -> some View {
+        modifier(SceneListChrome())
+    }
+
+    func sceneListRowFill() -> some View {
+        modifier(SceneListRowFill())
+    }
+}
+
+// MARK: - 输入框
+
+/// 卡片里的输入框。系统 `.roundedBorder` 会自己铺一块不透明白，所以这里关掉原生 bezel，
+/// 改用薄材质，装饰背景才能透出来。
+struct SoftTextFieldStyle: TextFieldStyle {
+    func _body(configuration: TextField<Self._Label>) -> some View {
+        SoftFieldBody { configuration }
+    }
+}
+
+extension TextFieldStyle where Self == SoftTextFieldStyle {
+    static var soft: SoftTextFieldStyle { SoftTextFieldStyle() }
+}
+
+enum NativeFieldChrome {
+    static func stripBezel(_ field: NSTextField) {
+        if field is NSSearchField { return }
+        if field.isBezeled { field.isBezeled = false }
+        if field.isBordered { field.isBordered = false }
+        if field.drawsBackground { field.drawsBackground = false }
+        if field.backgroundColor != .clear { field.backgroundColor = .clear }
+        if field.focusRingType != .none { field.focusRingType = .none }
+        if let cell = field.cell as? NSTextFieldCell {
+            if cell.drawsBackground { cell.drawsBackground = false }
+            cell.backgroundColor = .clear
+            cell.isBezeled = false
+            cell.isBordered = false
+        }
+        if field.wantsLayer {
+            field.layer?.backgroundColor = CGColor.clear
+        }
+    }
+
+    static func stripNearby(from probe: NSView) {
+        var node: NSView? = probe.superview
+        var depth = 0
+        while let current = node, depth < 12 {
+            if let field = current as? NSTextField {
+                stripBezel(field)
+                return
+            }
+            for sub in current.subviews {
+                if let field = sub as? NSTextField {
+                    stripBezel(field)
+                }
+                for inner in sub.subviews {
+                    if let field = inner as? NSTextField {
+                        stripBezel(field)
+                    }
+                }
+            }
+            node = current.superview
+            depth += 1
+        }
+    }
+}
+
+private struct NativeFieldChromeProbe: NSViewRepresentable {
+    func makeNSView(context: Context) -> Probe { Probe() }
+
+    func updateNSView(_ view: Probe, context: Context) {
+        view.apply()
+    }
+
+    final class Probe: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply()
+        }
+
+        override func viewDidMoveToSuperview() {
+            super.viewDidMoveToSuperview()
+            apply()
+        }
+
+        func apply() {
+            NativeFieldChrome.stripNearby(from: self)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                NativeFieldChrome.stripNearby(from: self)
+            }
+        }
+    }
+}
+
+private struct SoftFieldBody<Content: View>: View {
+    @ViewBuilder var content: Content
+    @SwiftUI.Environment(\.sceneBackdrop) private var scene
+    @SwiftUI.Environment(\.colorScheme) private var colorScheme
+    @SwiftUI.Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    private let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+
+    var body: some View {
+        content
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background { fill }
+            .overlay {
+                shape.strokeBorder(Color.primary.opacity(strokeOpacity), lineWidth: 1)
+            }
+            .background(NativeFieldChromeProbe())
+    }
+
+    @ViewBuilder
+    private var fill: some View {
+        if reduceTransparency {
+            shape.fill(Color(nsColor: .controlBackgroundColor))
+        } else if scene.isDecorative {
+            shape.fill(.ultraThinMaterial)
+        } else if usesLiquidGlass(reduceTransparency: false) {
+            shape.fill(.thinMaterial)
+        } else {
+            shape.fill(Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.06))
+        }
+    }
+
+    private var strokeOpacity: Double {
+        if reduceTransparency { return 0.16 }
+        return scene.isDecorative ? 0.14 : 0.12
+    }
+}
+
+private struct SceneListChrome: ViewModifier {
+    @SwiftUI.Environment(\.sceneBackdrop) private var scene
+    @SwiftUI.Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        if scene.isDecorative && !reduceTransparency {
+            content.scrollContentBackground(.hidden)
+        } else {
+            content
+        }
+    }
+}
+
+private struct SceneListRowFill: ViewModifier {
+    @SwiftUI.Environment(\.sceneBackdrop) private var scene
+    @SwiftUI.Environment(\.colorScheme) private var colorScheme
+    @SwiftUI.Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        if scene.isDecorative && !reduceTransparency {
+            let dark = scene.recipe(dark: colorScheme == .dark).looksDark
+            content.listRowBackground(Color.white.opacity(dark ? 0.05 : 0.14))
+        } else {
+            content
+        }
+    }
 }
 
 private struct FeatureSurfaceBackground: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @SwiftUI.Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @SwiftUI.Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @SwiftUI.Environment(\.colorScheme) private var colorScheme
+    @SwiftUI.Environment(\.sceneBackdrop) private var scene
+    @AppStorage(SceneBackdropSettings.motionDefaultsKey) private var sceneMotion = true
+
+    func body(content: Content) -> some View {
+        content
+            .scrollContentBackground(scene.isDecorative ? .hidden : .automatic)
+            .background { backdrop }
+            .animation(.easeInOut(duration: 0.35), value: scene)
+    }
 
     @ViewBuilder
-    func body(content: Content) -> some View {
-        if usesLiquidGlass(reduceTransparency: reduceTransparency) {
+    private var backdrop: some View {
+        if scene.isDecorative {
+            WindowAlignedBackdrop(
+                recipe: scene.recipe(dark: colorScheme == .dark || scene.prefersDarkAppearance),
+                animated: sceneMotion && !reduceMotion && !reduceTransparency,
+                reduceTransparency: reduceTransparency,
+                showsVeil: false
+            )
+            .ignoresSafeArea()
+        } else if usesLiquidGlass(reduceTransparency: reduceTransparency) {
             // 给玻璃一个中性采样底，避免浅色壁纸把整页染成高饱和青蓝色。
-            content.background(Color(nsColor: .windowBackgroundColor).opacity(0.62))
+            Color(nsColor: .windowBackgroundColor).opacity(0.62)
         } else {
-            content.background(Color(nsColor: .windowBackgroundColor))
+            Color(nsColor: .windowBackgroundColor)
         }
     }
 }
@@ -165,7 +364,7 @@ struct GlassGroup<Content: View>: View {
     var spacing: CGFloat?
     @ViewBuilder var content: () -> Content
 
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @SwiftUI.Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     @ViewBuilder
     var body: some View {

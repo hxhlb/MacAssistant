@@ -64,17 +64,18 @@ public enum CommandLibrary {
                      category: r.0, title: r.1, command: r.2, detail: r.3, risk: r.4, versionNote: r.5)
     }
 
-    /// 按关键字 / 风险 / 分类过滤。
+    /// 按关键字 / 风险 / 分类过滤。分类同时匹配中文主键和当前界面语言的译名。
     public static func search(_ keyword: String = "", risk: RiskLevel? = nil, category: String? = nil) -> [CommandEntry] {
-        let key = keyword.trimmingCharacters(in: .whitespaces).lowercased()
+        let key = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         return all.filter { entry in
             if let risk, entry.risk != risk { return false }
             if let category, entry.category != category { return false }
             if key.isEmpty { return true }
-            return entry.title.lowercased().contains(key)
-                || entry.command.lowercased().contains(key)
-                || entry.detail.lowercased().contains(key)
-                || entry.category.lowercased().contains(key)
+            return TextSearch.matches(entry.title, needle: key)
+                || TextSearch.matches(entry.command, needle: key)
+                || TextSearch.matches(entry.detail, needle: key)
+                || TextSearch.matches(entry.category, needle: key)
+                || TextSearch.matches(localizedCategory(entry.category), needle: key)
         }
     }
 
@@ -85,8 +86,13 @@ public enum CommandLibrary {
     /// 分类的中文名同时是数据主键(过滤、去重、`more-mac-commands.md` 解析都依赖它),
     /// 所以只在展示时翻译,不动存储值。
     public static func localizedCategory(_ category: String) -> String {
-        guard let slug = categorySlugs[category] else { return category }
+        guard let slug = categorySlug(category) else { return category }
         return L("cmd.category.\(slug)")
+    }
+
+    /// 稳定英文短名,给界面标识和辅助功能用。
+    public static func categorySlug(_ category: String) -> String? {
+        categorySlugs[category]
     }
 
     private static let categorySlugs: [String: String] = [

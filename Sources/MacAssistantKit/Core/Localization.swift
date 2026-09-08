@@ -5,7 +5,11 @@ import Foundation
 public enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
     case system
     case simplifiedChinese = "zh-Hans"
+    case traditionalChinese = "zh-Hant"
     case english = "en"
+    case spanish = "es"
+    case korean = "ko"
+    case russian = "ru"
 
     public var id: String { rawValue }
 
@@ -19,8 +23,62 @@ public enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .system: return MALocalizedString("language.system", bundle: .module)
         case .simplifiedChinese: return "简体中文"
+        case .traditionalChinese: return "繁體中文"
         case .english: return "English"
+        case .spanish: return "Español"
+        case .korean: return "한국어"
+        case .russian: return "Русский"
         }
+    }
+
+    /// 系统语言标签。`zh-TW` / `zh-HK` 归繁体，`zh` / `zh-CN` 归简体。
+    public var languageTags: [String] {
+        switch self {
+        case .system: return []
+        case .simplifiedChinese: return ["zh-hans", "zh-cn", "zh-sg"]
+        case .traditionalChinese: return ["zh-hant", "zh-tw", "zh-hk", "zh-mo"]
+        case .english: return ["en"]
+        case .spanish: return ["es"]
+        case .korean: return ["ko"]
+        case .russian: return ["ru"]
+        }
+    }
+
+    public func matches(languageIdentifier wanted: String) -> Bool {
+        let wanted = Self.normalize(wanted)
+        guard !wanted.isEmpty else { return false }
+        let candidate = rawValue.lowercased()
+        if wanted == candidate || wanted.hasPrefix(candidate + "-") { return true }
+        for tag in languageTags {
+            if wanted == tag || wanted.hasPrefix(tag + "-") { return true }
+        }
+        return false
+    }
+
+    /// 自己做语言匹配而不用 `Bundle.preferredLocalizations(from:)`：后者依赖主 bundle 的
+    /// 本地化列表，裸 SwiftPM 可执行文件下会恒定返回 en。
+    public static func bestMatch(for preferences: [String]) -> AppLanguage? {
+        for preference in preferences {
+            let wanted = normalize(preference)
+            if let match = translations.first(where: { $0.matches(languageIdentifier: wanted) }) {
+                return match
+            }
+            if wanted == "zh" || wanted.hasPrefix("zh-") {
+                return isTraditionalChinese(wanted) ? .traditionalChinese : .simplifiedChinese
+            }
+        }
+        return nil
+    }
+
+    private static func normalize(_ identifier: String) -> String {
+        identifier.lowercased().replacingOccurrences(of: "_", with: "-")
+    }
+
+    private static func isTraditionalChinese(_ wanted: String) -> Bool {
+        wanted.contains("hant")
+            || wanted.hasPrefix("zh-tw")
+            || wanted.hasPrefix("zh-hk")
+            || wanted.hasPrefix("zh-mo")
     }
 }
 
@@ -87,21 +145,8 @@ private final class LocalizationEngine: @unchecked Sendable {
         return Self.bestMatch(for: Locale.preferredLanguages) ?? developmentLanguage
     }
 
-    /// 自己做语言匹配而不用 `Bundle.preferredLocalizations(from:)`：后者依赖主 bundle 的
-    /// 本地化列表，裸 SwiftPM 可执行文件下会恒定返回 en。
     static func bestMatch(for preferences: [String]) -> AppLanguage? {
-        for preference in preferences {
-            let wanted = preference.lowercased()
-            for language in AppLanguage.translations {
-                let candidate = language.rawValue.lowercased()
-                if wanted == candidate
-                    || wanted.hasPrefix(candidate + "-")
-                    || candidate.hasPrefix(wanted + "-") {
-                    return language
-                }
-            }
-        }
-        return nil
+        AppLanguage.bestMatch(for: preferences)
     }
 
     private func lproj(_ language: AppLanguage, in base: Bundle) -> Bundle? {

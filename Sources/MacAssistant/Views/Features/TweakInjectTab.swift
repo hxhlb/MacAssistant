@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 import MacAssistantKit
@@ -69,14 +70,7 @@ struct TweakInjectTab: View {
 
             Card {
                 VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text(L(inputMode == .macOSApp ? "macappview.plugins" : "tweaktab.tweaks")).font(.headline)
-                        Spacer()
-                        MultiFilePickerButton(title: L(inputMode == .macOSApp ? "macappview.addPlugin" : "tweaktab.addTweak"), systemImage: "plus",
-                                              types: payloadTypes) { urls in
-                            urls.forEach(addPayload)
-                        }
-                    }
+                    Text(L(inputMode == .macOSApp ? "macappview.plugins" : "tweaktab.tweaks")).font(.headline)
                     payloadDropZone
                     if tweaks.isEmpty && extraFrameworks.isEmpty {
                         Text(L(inputMode == .macOSApp ? "macappview.noPlugins" : "tweaktab.noTweaks"))
@@ -293,6 +287,29 @@ struct TweakInjectTab: View {
                 }
             }
             return true
+        }
+        .onTapGesture { pickPayloads() }
+        .onHover { hovering in
+            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+        .help(L("tweaktab.dropPayloads"))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(L("tweaktab.dropPayloads"))
+        .accessibilityAction { pickPayloads() }
+    }
+
+    /// 点击虚线框弹出访达选择器。可多选；.framework 是目录型包，也要能选。
+    private func pickPayloads() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowedContentTypes = payloadTypes
+        panel.allowsOtherFileTypes = true
+        panel.prompt = L("theme.chooseFile")
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        FileSystemHelper.withSecurityScopedAccess(to: panel.urls) {
+            panel.urls.forEach(addPayload)
         }
     }
 

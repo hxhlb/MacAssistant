@@ -538,7 +538,7 @@ struct InjectDylibTab: View {
                     .truncationMode(.middle)
                     .frame(minWidth: 140, idealWidth: 180, maxWidth: 180, alignment: .leading)
                 TextField(L("ipaview.resourceDestination"), text: resource.destination)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.soft)
                     .frame(minWidth: 180)
                 Toggle(L("ipaview.replaceExisting"), isOn: resource.replaceExisting)
                     .toggleStyle(.checkbox)
@@ -554,7 +554,7 @@ struct InjectDylibTab: View {
                     resourceDeleteButton(id: value.id)
                 }
                 TextField(L("ipaview.resourceDestination"), text: resource.destination)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.soft)
                 Toggle(L("ipaview.replaceExisting"), isOn: resource.replaceExisting)
                     .toggleStyle(.checkbox)
             }
@@ -627,7 +627,7 @@ struct InjectDylibTab: View {
                                 L("ipaview.customTarget.placeholder"),
                                 text: $draft.customTargetPath
                             )
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(.soft)
                             .padding(.top, 4)
                         }
                         ViewThatFits(in: .horizontal) {
@@ -699,18 +699,18 @@ struct InjectDylibTab: View {
         Card {
             VStack(alignment: .leading, spacing: IpaLayout.formSpacing) {
                 Text(L("ipaview.section.metadata")).font(.headline)
-                TextField(L("ipaview.displayName"), text: $displayName).textFieldStyle(.roundedBorder)
-                TextField(L("ipaview.bundleID"), text: $bundleID).textFieldStyle(.roundedBorder)
+                TextField(L("ipaview.displayName"), text: $displayName).textFieldStyle(.soft)
+                TextField(L("ipaview.bundleID"), text: $bundleID).textFieldStyle(.soft)
                 HStack {
-                    TextField(L("ipaview.shortVersion"), text: $shortVersion).textFieldStyle(.roundedBorder)
-                    TextField(L("ipaview.buildVersion"), text: $buildVersion).textFieldStyle(.roundedBorder)
-                    TextField(L("ipaview.minimumOS"), text: $minimumOSVersion).textFieldStyle(.roundedBorder)
+                    TextField(L("ipaview.shortVersion"), text: $shortVersion).textFieldStyle(.soft)
+                    TextField(L("ipaview.buildVersion"), text: $buildVersion).textFieldStyle(.soft)
+                    TextField(L("ipaview.minimumOS"), text: $minimumOSVersion).textFieldStyle(.soft)
                 }
                 Text(L("workbench.recipe.bundleID.note"))
                     .font(.caption).foregroundStyle(.secondary)
                 Text(L("workbench.recipe.minimumOS.note"))
                     .font(.caption).foregroundStyle(.secondary)
-                TextField(L("ipaview.outputName"), text: $outputName).textFieldStyle(.roundedBorder)
+                TextField(L("ipaview.outputName"), text: $outputName).textFieldStyle(.soft)
                 IpaMultiFilePickerButton(
                     title: L("ipaview.replaceIcon"),
                     systemImage: "photo",
@@ -1127,15 +1127,11 @@ struct InjectDylibTab: View {
     }
 
     private func openPrivacySettings(anchor: String) {
-        let candidates = [
-            "x-apple.systempreferences:com.apple.preference.security?\(anchor)",
-            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?\(anchor)"
-        ]
-        for value in candidates {
-            if let url = URL(string: value), NSWorkspace.shared.open(url) { return }
+        guard PrivacySettingsOpener.open(anchor: anchor) else {
+            ok = false
+            log = L("ipaview.access.openFailed")
+            return
         }
-        ok = false
-        log = L("ipaview.access.openFailed")
     }
 
     private func moveStep(_ delta: Int) {

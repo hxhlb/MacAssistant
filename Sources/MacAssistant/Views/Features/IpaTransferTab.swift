@@ -58,6 +58,8 @@ struct IpaTransferTab: View {
                 }
             }
 
+            PermissionGuideCard(needs: PermissionGuide.ipaTransfer)
+
             deviceCard
 
             switch mode {
@@ -118,9 +120,9 @@ struct IpaTransferTab: View {
                     Text(L("ipatransfer.manualUDID")).font(.subheadline.weight(.medium))
                     HStack {
                         TextField(L("ipatransfer.manualUDID.placeholder"), text: $manualUDID)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(.soft)
                         TextField(L("ipatransfer.manualName.placeholder"), text: $manualDeviceName)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(.soft)
                             .frame(maxWidth: 180)
                     }
                 }
@@ -224,7 +226,7 @@ struct IpaTransferTab: View {
                 }
                 Toggle(L("ipatransfer.includeSystem"), isOn: $includeSystem)
                 TextField(L("ipatransfer.filterApps"), text: $appQuery)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.soft)
                 if filteredApps.isEmpty {
                     Text(L("ipatransfer.noApps"))
                         .font(.footnote)
@@ -238,9 +240,11 @@ struct IpaTransferTab: View {
                                 .foregroundStyle(.secondary)
                         }
                         .tag(app.bundleIdentifier)
+                        .sceneListRowFill()
                     }
                     .frame(minHeight: 160, maxHeight: 240)
                     .listStyle(.inset)
+                    .sceneListChrome()
                 }
                 HStack {
                     FilePickerButton(

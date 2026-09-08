@@ -4,6 +4,37 @@ All notable changes to MacAssistant are recorded here.
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-09-08
+
+Ad-hoc signed; not notarized by Apple. Update from **About → Check for updates**.
+
+### Added
+
+- **App Clones**: soft/hard clones of WeChat, browsers, and editors with isolated data; update, delete, and per-clone proxy
+- Move “New Instance” onto App Clones; rename the injection-page copy action to avoid the name clash
+- **Desktop Icons**: customize Finder icons for desktop files, folders, and apps, with color and type presets
+- **Page backgrounds**: palettes such as Sky, Music, Notes, Freeform, Shortcuts, Podcasts, Things, Arc, Linear, Night Green, and Starfield (About or the View menu); title bar, sidebar, and content share one scene
+- **Motion**: optional animated backgrounds. Clouds and motes drift slowly and part around the pointer
+- **Appearance**: System / Light / Dark (Night Green and Starfield still use a dark recipe so light text does not sit on a dark scene)
+- **Icon color**: monochrome, color, the same default palette as Desktop Icons, or a custom color. Each click of Color reshuffles sidebar icon tints
+- **Languages**: Traditional Chinese, Korean, Spanish, and Russian in addition to Simplified Chinese and English (no Japanese)
+
+### Improved
+
+- Text fields on feature pages use a thin material fill instead of a solid white rounded border
+- System Cleanup now covers system data, developer caches, Docker, and Time Machine snapshots; still home-directory only
+- Overview and Network show live CPU, memory pressure, battery, and throughput; the memory row opens Memory tools
+- DNS flush and quit-by-port move to Network
+- App Repair and Quick Toggles are searchable; related pages state the permissions they need
+- Development builds use a stable local certificate so overwrite installs keep TCC grants
+- Environment check copy for `dsdump` and `xtool` is more accurate
+
+### Fixed
+
+- About → Sidebar: Translucent now actually shows the desktop or the page scene; it previously looked identical to System material
+- Injection page no longer nags when App Management cannot be probed
+- Memory tools process list updates when an app quits, instead of staying on the snapshot from when the page opened
+
 ## [1.0.3] - 2026-09-03
 
 - Fix a launch crash on macOS 15.0–15.1
@@ -120,6 +151,7 @@ First public prerelease.
 
 This prerelease is ad-hoc signed and not notarized. macOS may block the first launch. Open the app once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. Full steps: [README](README.md#first-launch-blocked-by-macos).
 
+[1.0.4]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.4
 [1.0.3]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.3
 [1.0.2]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.2
 [1.0.1]: https://github.com/iosrxwy/MacAssistant/releases/tag/v1.0.1

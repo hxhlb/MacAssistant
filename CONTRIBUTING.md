@@ -28,7 +28,7 @@ Such Issues and PRs will be closed.
 
 1. Fork and branch from `master`.
 2. Keep the change focused. One problem per PR.
-3. Run `swift test` (and `swift build` if you touched the app target).
+3. Run `swift build`.
 4. Fill in the PR template. CI must pass before merge.
 
 Review is requested automatically (`CODEOWNERS`). Maintainers can still push to `master` directly; incoming PRs need a green `build` check.

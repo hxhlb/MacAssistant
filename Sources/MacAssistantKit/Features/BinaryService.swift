@@ -58,9 +58,10 @@ public enum BinaryService {
     /// 使用 codesign 进行 ad-hoc 签名(签名标识为 `-`)。
     @discardableResult
     public static func adhocSign(fileAt url: URL, force: Bool = true,
-                                 entitlements: URL? = nil) throws -> CommandResult {
+                                 entitlements: URL? = nil, deep: Bool = false) throws -> CommandResult {
         var args: [String] = []
         if force { args.append("-f") }
+        if deep { args.append("--deep") }
         if let entitlements { args.append(contentsOf: ["--entitlements", entitlements.path]) }
         args.append(contentsOf: ["-s", "-", url.path])
         return try ExternalTool.codesign.run(args)

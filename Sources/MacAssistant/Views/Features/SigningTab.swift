@@ -74,6 +74,8 @@ struct SigningTab: View {
                 }
             }
 
+            PermissionGuideCard(needs: PermissionGuide.signing)
+
             Text(L("signingtab.sideload.note"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -140,7 +142,7 @@ struct SigningTab: View {
                 )
                 VStack(alignment: .leading, spacing: 4) {
                     Text(L("signingtab.overrideBundleID")).font(.subheadline.weight(.medium))
-                    TextField(L("signingtab.bundleID.placeholder"), text: $overrideBundleID).textFieldStyle(.roundedBorder)
+                    TextField(L("signingtab.bundleID.placeholder"), text: $overrideBundleID).textFieldStyle(.soft)
                 }
                 Text(L("signingtab.realDevice.detail"))
                     .font(.caption).foregroundStyle(.secondary)
@@ -218,9 +220,9 @@ struct SigningTab: View {
                     .font(.caption).foregroundStyle(.secondary)
                 HStack {
                     TextField(L("signingtab.appleID.account"), text: $appleID)
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.soft)
                     SecureField(L("signingtab.appleID.password"), text: $appleIDPassword)
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.soft)
                 }
                 HStack {
                     Toggle(L("signingtab.appleID.remember"), isOn: $rememberAppleID)
@@ -236,7 +238,7 @@ struct SigningTab: View {
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     TextField(L("signingtab.appleID.twoFactor"), text: $twoFactorCode)
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.soft)
                     Text(L("signingtab.appleID.twoFactor.hint"))
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -285,9 +287,9 @@ struct SigningTab: View {
                     Text(L("signingtab.appleID.manualUDID")).font(.subheadline.weight(.medium))
                     HStack {
                         TextField(L("signingtab.appleID.manualUDID.placeholder"), text: $manualUDID)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(.soft)
                         TextField(L("signingtab.appleID.manualName.placeholder"), text: $manualDeviceName)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(.soft)
                             .frame(maxWidth: 180)
                     }
                     Text(L("signingtab.appleID.manualUDID.hint"))
@@ -663,7 +665,7 @@ struct DeveloperSigningPicker: View {
                         adoptCertificateMaterials(urls)
                     }
                     TextField(L("signingtab.p12Password"), text: $p12Password)
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.soft)
                         .frame(maxWidth: 220)
                     Button {
                         importP12()

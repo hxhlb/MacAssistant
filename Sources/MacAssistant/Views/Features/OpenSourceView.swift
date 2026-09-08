@@ -17,6 +17,7 @@ struct OpenSourceView: View {
             Credit(id: "libimobiledevice", title: L("about.thirdParty.libimobiledevice"), url: ProductLinks.libimobiledevice),
             Credit(id: "theos", title: L("about.thirdParty.theos"), url: ProductLinks.theosProject),
             Credit(id: "zsign", title: L("about.thirdParty.zsign"), url: ProductLinks.zsignProject),
+            Credit(id: "atbClone", title: L("about.thirdParty.atbClone"), url: ProductLinks.atbCloneProject),
             Credit(id: "classDump", title: L("about.thirdParty.classDump"), url: ProductLinks.classDumpProject),
             Credit(id: "dsdump", title: L("about.thirdParty.dsdump"), url: ProductLinks.dsdumpProject),
         ]
@@ -77,6 +78,5 @@ struct OpenSourceView: View {
                 }
             }
         }
-        .navigationTitle(SidebarItem.opensource.title)
     }
 }

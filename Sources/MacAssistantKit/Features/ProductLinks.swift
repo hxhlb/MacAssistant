@@ -39,4 +39,6 @@ public enum ProductLinks {
     public static let libimobiledevice = URL(string: "https://libimobiledevice.org")!
     public static let theosProject = URL(string: "https://github.com/theos/theos")!
     public static let zsignProject = URL(string: "https://github.com/zhlynn/zsign")!
+    /// 开源致谢：应用分身隔离思路参考 ATBClone（GPL-3.0），不捆绑其 Python 运行时。
+    public static let atbCloneProject = URL(string: "https://github.com/aitobox/ATBClone")!
 }

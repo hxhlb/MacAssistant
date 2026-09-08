@@ -34,3 +34,23 @@ DerivedData/
 
 # Local Obsidian review vault (must never be uploaded)
 /Mac小助手知识库/
+
+# Local test suite and thinking notes (never publish)
+/Tests/
+*思考*.md
+*.thinking.md
+
+# Agent / IDE local state
+.grok/
+.cursor/
+.claude/
+.agents/
+
+# Design scratch that is not a shipping screenshot
+/docs/assets/icon-proposals/
+/scripts/hero.html
+/scripts/hero-*.html
+/scripts/hero-studio.jpg
+/scripts/capture_window.swift
+/scripts/patch_overview_hostname.swift
+/output/

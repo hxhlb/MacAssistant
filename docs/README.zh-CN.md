@@ -1,12 +1,13 @@
 <p align="center">
-  <img src="assets/macassistant-hero-brand.png" alt="Mac小助手" width="880">
+  <img src="assets/app-icon.png" width="96" alt="Mac小助手">
 </p>
 
-<h1 align="center">MacAssistant</h1>
+<h1 align="center">Mac小助手</h1>
 
 <p align="center">
-  一个 App，搞定 Mac 维护与 Apple 二进制工作流。
+  原生 Mac 工具箱：系统维护、应用分身、软件修复、命令速查、应用侧载。
 </p>
+
 
 <p align="center">
   <a href="../README.md">English</a>
@@ -16,46 +17,89 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/iosrxwy/MacAssistant/actions/workflows/ci.yml"><img src="https://github.com/iosrxwy/MacAssistant/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/macOS-13%2B-111111?logo=apple&logoColor=white" alt="macOS 13+">
+  <img src="https://img.shields.io/badge/Swift-5.9%2B-F05138?logo=swift&logoColor=white" alt="Swift 5.9+">
+  <a href="../LICENSE"><img src="https://img.shields.io/github/license/iosrxwy/MacAssistant" alt="GPL-3.0"></a>
+</p>
+
+<p align="center">
   <a href="https://github.com/iosrxwy/MacAssistant/releases"><img src="https://img.shields.io/badge/Download-Releases-0A84FF?style=flat-square&logo=apple&logoColor=white" alt="Download"></a>
   <a href="https://x.com/iOSRXWY"><img src="https://img.shields.io/badge/X-@iOSRXWY-111111?style=flat-square&logo=x&logoColor=white" alt="X"></a>
   <a href="https://t.me/iosrxwy"><img src="https://img.shields.io/badge/Telegram-@iosrxwy-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram"></a>
 </p>
 
-## 为什么值得用
-
-| 日常维护 | Apple 开发工具 | 用得放心 |
-| --- | --- | --- |
-| 看状态、腾空间、修 App、查内存与网络。 | DEB、DYLIB、IPA、Mach-O 与签名集中处理。 | 操作前预览、关键步骤确认、开源且无遥测。 |
-
-## 功能一览
-
-### 日常工具
-
-- **系统概览**：芯片、内存、磁盘、电池与运行时间一眼看清
-- **安全清理**：缓存、日志、Xcode 数据等可再生文件
-- **应用修复**：诊断签名、隔离属性与启动问题
-- **内存与网络**：压力、进程、端口、Ping、DNS 与公网 IP
-- **命令速查**：262 条 macOS 命令，支持搜索与风险标识
-
-### 开发者工具 · Beta
-
-- **DEB**：制作、检查、解包、转换与重新打包
-- **DYLIB**：依赖检查、动态库提取、安装名与 rpath 修改
-- **IPA**：拖入工作台、安装与原样提取（不脱壳）、注入、瘦身、头文件提取、逐层签名与 Apple ID 签名
-- **Mach-O**：原生 Swift 检查与 dylib 注入，支持单架构和通用二进制
-- **环境检查**：识别所需工具并提供清晰的安装指引
-
-## 界面
-
 <p align="center">
-  <img src="assets/screenshots/system-cleanup.png" alt="系统清理" width="49%">
-  <img src="assets/screenshots/deb-wizard.png" alt="DEB 向导" width="49%">
+  <img src="assets/macassistant-hero-brand.png" alt="系统概览" width="880">
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/ipa-toolbox.png" alt="IPA 工具箱" width="49%">
-  <img src="assets/screenshots/system-overview.png" alt="系统概览" width="49%">
+  <sub>实时 CPU、内存、磁盘、电池。界面语言可在「关于软件」切换。</sub>
 </p>
+
+## 常规功能
+
+<table>
+  <tr>
+    <td align="center" width="50%" valign="top">
+      <img src="assets/screenshots/system-cleanup.png" alt="系统清理" width="430">
+      <br>
+      <b>系统清理</b><br>
+      缓存、Derived Data、Docker、Time Machine 先预览再删，只动主目录。
+    </td>
+    <td align="center" width="50%" valign="top">
+      <img src="assets/screenshots/app-clones.png" alt="应用分身" width="430">
+      <br>
+      <b>应用分身</b><br>
+      微信 / 浏览器 / 编辑器独立数据目录，可按分身配代理。
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%" valign="top">
+      <img src="assets/screenshots/desktop-icons.png" alt="桌面图标" width="430">
+      <br>
+      <b>桌面图标</b><br>
+      给文件、文件夹、应用换色，含类型预设。
+    </td>
+    <td align="center" width="50%" valign="top">
+      <img src="assets/screenshots/ipa-workbench.png" alt="IPA 工作台" width="430">
+      <br>
+      <b>IPA 工作台</b><br>
+      拖入 IPA，注入插件、瘦身、头文件、签名。Beta。
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%" valign="top">
+      <img src="assets/screenshots/mac-inject.png" alt="Mac 应用注入" width="430">
+      <br>
+      <b>Mac 应用注入</b><br>
+      给本地 <code>.app</code> 注入 dylib，或先复制再注入。Beta。
+    </td>
+    <td align="center" width="50%" valign="top">
+      <img src="assets/screenshots/environment.png" alt="环境检查" width="430">
+      <br>
+      <b>环境检查</b><br>
+      找出缺的工具（Theos、zsign、Homebrew、codesign…）并给出安装步骤。
+    </td>
+  </tr>
+</table>
+
+
+### 其他功能
+
+| 日常工具 | 开发者工具 |
+| --- | --- |
+| 应用修复（已损坏、隔离属性、签名） | DEB 制作、检查、转换、重新打包 |
+| 实时内存压力与进程管理 | DYLIB 依赖、安装名、rpath |
+| 网络：速率、端口、Ping、DNS、公网 IP | IPA 安装 / 原样提取（不脱壳） |
+| 可搜索的命令速查，带风险标识 | Mach-O 检查与 class-dump |
+| 访达、截图、隐藏文件等快捷开关 | 逐层签名与 Apple ID 签名 |
+
+破坏性操作前会预览。开源，无遥测。
+
+页面背景、侧栏材质、图标颜色和六种界面语言在 **关于软件**。
+
+
 
 ## 下载
 
@@ -63,9 +107,14 @@
 
 发布动态：[X @iOSRXWY](https://x.com/iOSRXWY) · [Telegram](https://t.me/iosrxwy)
 
+
+
 ### 首次打开被拦截？
 
-1.0 正式版是 **ad-hoc 签名，未经 Apple 公证**。先打开一次，再到 **系统设置 → 隐私与安全性 → 仍要打开**。不要全局关闭 Gatekeeper。
+> [!IMPORTANT]
+> 正式版是 **ad-hoc 签名，未经 Apple 公证**。先打开一次，再到 **系统设置 → 隐私与安全性 → 仍要打开**。不要全局关闭 Gatekeeper。
+
+
 
 ## 构建
 
@@ -76,25 +125,7 @@ cd MacAssistant
 open "dist/Mac小助手.app"
 ```
 
-## 星标
 
-<p align="center">
-  <a href="https://github.com/iosrxwy/MacAssistant/stargazers"><img src="https://img.shields.io/github/stars/iosrxwy/MacAssistant?style=flat-square&logo=github" alt="GitHub stars"></a>
-</p>
-
-<p align="center">
-  <img src="https://progress-bar.xyz/dynamic/json/?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fiosrxwy%2FMacAssistant&query=%24.stargazers_count&scale=100&title=goal&width=420&color=0A84FF&suffix=%20/%20100&cache=3600" alt="Star 目标">
-</p>
-
-<p align="center">
-  <a href="https://star-history.com/#iosrxwy/MacAssistant&Date">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=iosrxwy/MacAssistant&type=Date&theme=dark">
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=iosrxwy/MacAssistant&type=Date">
-      <img alt="Star History" src="https://api.star-history.com/svg?repos=iosrxwy/MacAssistant&type=Date" width="640">
-    </picture>
-  </a>
-</p>
 
 ## 贡献者
 
@@ -127,12 +158,12 @@ open "dist/Mac小助手.app"
 
 ## 致谢
 
-[AltSign](https://github.com/rileytestut/AltSign) / [AltStore](https://github.com/altstoreio/AltStore) · [xtool](https://github.com/xtool-org/xtool) · [libimobiledevice](https://libimobiledevice.org) · [Theos](https://github.com/theos/theos) · [zsign](https://github.com/zhlynn/zsign)
+[AltSign](https://github.com/rileytestut/AltSign) / [AltStore](https://github.com/altstoreio/AltStore) · [xtool](https://github.com/xtool-org/xtool) · [libimobiledevice](https://libimobiledevice.org) · [Theos](https://github.com/theos/theos) · [zsign](https://github.com/zhlynn/zsign) · [ATBClone](https://github.com/aitobox/ATBClone)
 
-均不捆绑其二进制。
+
 
 ## 许可证
 
-[GNU GPL-3.0](../LICENSE)。对外分发的修改版必须继续以同样许可证提供完整对应源代码。这并不允许把别人的工具打进 App：`class-dump` 同为 GPL-3.0，捆绑时必须一并提供对应源代码；`dsdump` 许可证不明，不可再分发；AltStore / AltSign 为 AGPL-3.0，本项目只参考公开协议。
+[GNU GPL-3.0](../LICENSE)。对外分发的修改版必须继续以同样许可证提供完整对应源代码。
 
 安全问题见 [SECURITY.md](../SECURITY.md)。

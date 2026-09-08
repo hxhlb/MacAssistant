@@ -10,6 +10,7 @@ public enum CleanupPathError: LocalizedError, Equatable {
     case permissionDenied
     case symbolicLink
     case changedSinceScan
+    case denied
 
     public var errorDescription: String? {
         switch self {
@@ -21,6 +22,7 @@ public enum CleanupPathError: LocalizedError, Equatable {
         case .permissionDenied: return L("cleanup.path.error.permission-denied")
         case .symbolicLink: return L("cleanup.path.error.symbolic-link")
         case .changedSinceScan: return L("cleanup.path.error.changed-since-scan")
+        case .denied: return L("cleanup.path.error.denied")
         }
     }
 }
@@ -68,6 +70,9 @@ public struct CleanupPathPolicy: Sendable {
         }) else {
             throw CleanupPathError.outsideAllowedRoots
         }
+        guard !isDenied(requested) else {
+            throw CleanupPathError.denied
+        }
 
         let fileInfo = try identity(at: requested)
         guard !fileInfo.isSymbolicLink else {
@@ -85,6 +90,9 @@ public struct CleanupPathPolicy: Sendable {
             isDescendantOrEqual(canonicalComponents, of: $0)
         }) else {
             throw CleanupPathError.outsideAllowedRoots
+        }
+        guard !isDenied(canonical) else {
+            throw CleanupPathError.denied
         }
 
         return CleanupValidatedPath(
@@ -111,6 +119,10 @@ public struct CleanupPathPolicy: Sendable {
 
     public func isWritable(_ path: CleanupValidatedPath) -> Bool {
         FileManager.default.isWritableFile(atPath: path.canonicalURL.path)
+    }
+
+    public func isDenied(_ url: URL) -> Bool {
+        CleanupDeniedPaths.contains(url, homeDirectory: homeDirectory)
     }
 
     public func contains(_ child: CleanupValidatedPath, within root: CleanupValidatedPath) -> Bool {

@@ -4,11 +4,21 @@ public struct MacAppCloneOptions: Sendable {
     public var displayName: String
     public var bundleID: String
     public var signMethod: SignMethod
+    public var prep: AppCloneBundlePrep
+    public var relocateIfUnwritable: Bool
 
-    public init(displayName: String, bundleID: String, signMethod: SignMethod = .codesignAdhoc) {
+    public init(
+        displayName: String,
+        bundleID: String,
+        signMethod: SignMethod = .codesignAdhoc,
+        prep: AppCloneBundlePrep = .hardDefaults,
+        relocateIfUnwritable: Bool = true
+    ) {
         self.displayName = displayName
         self.bundleID = bundleID
         self.signMethod = signMethod
+        self.prep = prep
+        self.relocateIfUnwritable = relocateIfUnwritable
     }
 }
 
@@ -47,20 +57,32 @@ public enum MacAppCloneService {
         }
         _ = try IpaService.infoPlist(appBundle: source)
 
-        let proposed = outputURL ?? source.deletingLastPathComponent()
-            .appendingPathComponent(name)
-            .appendingPathExtension("app")
-        guard !FileManager.default.fileExists(atPath: proposed.path) else {
-            throw MacAppCloneError.outputExists(proposed.path)
+        let proposed: URL
+        if let outputURL {
+            guard !FileManager.default.fileExists(atPath: outputURL.path) else {
+                throw MacAppCloneError.outputExists(outputURL.path)
+            }
+            proposed = outputURL
+        } else {
+            let directory = options.relocateIfUnwritable
+                ? AppCloneBundlePreparer.writableOutputDirectory(nextTo: source)
+                : source.deletingLastPathComponent()
+            proposed = AppCloneBundlePreparer.uniqueAppURL(named: name, in: directory)
         }
         try FileManager.default.createDirectory(
             at: proposed.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
         let temporary = proposed.deletingLastPathComponent()
-            .appendingPathComponent(".(proposed.lastPathComponent).(UUID().uuidString)")
+            .appendingPathComponent(".\(proposed.lastPathComponent).\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: temporary) }
         try FileManager.default.copyItem(at: source, to: temporary)
+        if options.prep.stripNestedBundles {
+            AppCloneBundlePreparer.removeNestedBundles(in: temporary)
+        }
+        if options.prep.stripProvisioningProfile {
+            AppCloneBundlePreparer.removeProvisioningProfile(in: temporary)
+        }
 
         try SigningService.rewriteBundleIDGraph(in: temporary, rootBundleID: bundleID)
         try updateRootInfoPlist(
@@ -71,6 +93,9 @@ public enum MacAppCloneService {
                 "CFBundleIdentifier": bundleID
             ]
         )
+        if options.prep.stripLocalizedNames {
+            AppCloneBundlePreparer.stripLocalizedDisplayNames(in: temporary)
+        }
         var log: [String] = []
         _ = try SigningService.resignJailbreak(
             app: temporary,
@@ -79,6 +104,9 @@ public enum MacAppCloneService {
             log: &log
         )
         try FileManager.default.moveItem(at: temporary, to: proposed)
+        if options.prep.tintFinderIcon {
+            AppCloneBundlePreparer.tintFinderIcon(at: proposed, index: options.prep.iconIndex)
+        }
         return proposed
     }
 
@@ -94,6 +122,7 @@ public enum MacAppCloneService {
             throw MacAppCloneError.invalidApp
         }
         values.forEach { plist[$0.key] = $0.value }
+        plist["LSHasLocalizedDisplayName"] = nil
         try PropertyListSerialization.data(
             fromPropertyList: plist,
             format: format,

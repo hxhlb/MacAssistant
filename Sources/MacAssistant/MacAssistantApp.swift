@@ -5,6 +5,7 @@ import MacAssistantKit
 @main
 struct MacAssistantApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @AppStorage(SceneBackdropSettings.defaultsKey) private var sceneRaw = SceneBackdropID.system.rawValue
 
     var body: some Scene {
         WindowGroup {
@@ -13,9 +14,25 @@ struct MacAssistantApp: App {
                 .tint(.appAccent)
         }
         .windowStyle(.titleBar)
+        .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(before: .toolbar) {
+                Picker(L("about.scene.title"), selection: sceneBinding) {
+                    ForEach(SceneBackdropID.allCases) { scene in
+                        Text(scene.title).tag(scene.rawValue)
+                    }
+                }
+                .pickerStyle(.inline)
+            }
         }
+    }
+
+    private var sceneBinding: Binding<String> {
+        Binding(
+            get: { SceneBackdropID.resolved(sceneRaw).rawValue },
+            set: { sceneRaw = $0 }
+        )
     }
 
     private var initialRoute: SidebarItem {
@@ -33,6 +50,10 @@ struct MacAssistantApp: App {
 /// 设置为常规 App(出现在 Dock),并在启动后激活窗口。
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // 必须在第一扇窗口出来之前写：macOS 26 默认把侧栏收成一块浮着的圆角玻璃。
+        // 关掉后侧栏贴窗边、拉满高度，接近 Codex / Finder 的通栏做法。
+        UserDefaults.standard.set(false, forKey: "NSSplitViewItemSidebarDefaultsToFloatingAppearance")
+        UserDefaults.standard.set(0.0, forKey: "NSSplitViewItemGlassMinimumCornerRadius")
         AppIconLoader.install()
     }
 

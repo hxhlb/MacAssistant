@@ -113,13 +113,13 @@ public enum ExternalTool: String, CaseIterable, Sendable {
     case plistBuddy  // /usr/libexec/PlistBuddy  取 entitlements / 改 bundle id
     case vtool       // /usr/bin/vtool       去架构后修平台标记(可选)
     case ditto       // /usr/bin/ditto       保留软链的干净打包
-    case classDump   // class-dump           导出 ObjC 头文件(需安装)
-    case dsdump      // dsdump               ObjC/Swift 符号与类型(需安装)
+    case classDump   // class-dump           导出 ObjC 头文件(可选增强)
+    case dsdump      // dsdump               ObjC/Swift 符号与类型(可选;仓库无开源许可)
     case zsign       // zsign                手机 IPA 证书签名
     case ideviceID   // idevice_id           列出 USB / 网络 iOS 设备
     case ideviceInfo // ideviceinfo          读 UDID / 名称 / 系统版本
     case ideviceInstaller // ideviceinstaller 把已签名 IPA 装到已连接设备
-    case xtool       // xtool                Apple ID 开发者服务(可选)
+    case xtool       // xtool                Apple ID 签名备用通道(可选)
 
     /// 命令名(用于 which 查找)。
     public var commandName: String {
@@ -194,16 +194,19 @@ public enum ExternalTool: String, CaseIterable, Sendable {
         case .ideviceID, .ideviceInfo, .ideviceInstaller:
             return .openProjectPage(ProductLinks.libimobiledevice)
         case .xtool:
-            return .openProjectPage(ProductLinks.xtoolProject)
+            return .builtInFallback(
+                description: L("tool.xtool.builtInFallback"),
+                projectURL: ProductLinks.xtoolProject
+            )
         case .classDump:
             return .builtInFallback(
                 description: L("tool.classDump.builtInFallback"),
-                projectURL: URL(string: "https://github.com/nygard/class-dump")
+                projectURL: ProductLinks.classDumpProject
             )
         case .dsdump:
             return .builtInFallback(
                 description: L("tool.dsdump.builtInFallback"),
-                projectURL: URL(string: "https://github.com/DerekSelander/dsdump")
+                projectURL: ProductLinks.dsdumpProject
             )
         case .otool, .lipo, .installNameTool, .xcrun, .swiftc, .clang, .strip, .vtool:
             return .xcodeCommandLineTools

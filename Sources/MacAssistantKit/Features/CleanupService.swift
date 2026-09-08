@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// 一个可清理目标(将删除其中每个目录的“内容”,保留目录本身)。
@@ -96,195 +97,10 @@ public enum CleanupService {
     public static func definitions(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> [CleanupTargetDefinition] {
-        func h(_ path: String) -> URL { homeDirectory.appendingPathComponent(path) }
-        return [
-            CleanupTargetDefinition(
-                id: "user-caches",
-                name: L("cleanup.user-caches.name"),
-                detail: L("cleanup.user-caches.detail"),
-                paths: [h("Library/Caches")],
-                risk: .caution,
-                action: .moveContentsToTrash,
-                defaultSelected: false,
-                category: .system,
-                systemImage: "internaldrive"
-            ),
-            CleanupTargetDefinition(
-                id: "browser-caches",
-                name: L("cleanup.browser-caches.name"),
-                detail: L("cleanup.browser-caches.detail"),
-                paths: [
-                    h("Library/Caches/Google/Chrome"),
-                    h("Library/Caches/Microsoft Edge"),
-                    h("Library/Caches/BraveSoftware/Brave-Browser"),
-                    h("Library/Caches/Firefox"),
-                    h("Library/Caches/com.apple.Safari"),
-                    h("Library/Containers/com.apple.Safari/Data/Library/Caches")
-                ],
-                risk: .safe,
-                action: .moveContentsToTrash,
-                defaultSelected: false,
-                category: .system,
-                systemImage: "safari"
-            ),
-            CleanupTargetDefinition(
-                id: "developer-caches",
-                name: L("cleanup.developer-caches.name"),
-                detail: L("cleanup.developer-caches.detail"),
-                paths: [
-                    h("Library/Caches/com.apple.dt.Xcode"),
-                    h("Library/Caches/org.swift.swiftpm"),
-                    h("Library/Developer/Xcode/SourcePackages/artifacts"),
-                    h("Library/Caches/go-build"),
-                    h("Library/Caches/pnpm"),
-                    h(".cargo/registry/cache")
-                ],
-                risk: .safe,
-                action: .moveContentsToTrash,
-                defaultSelected: false,
-                category: .packageManager,
-                systemImage: "hammer"
-            ),
-            CleanupTargetDefinition(
-                id: "xcode-derived",
-                name: L("cleanup.xcode-derived.name"),
-                detail: L("cleanup.xcode-derived.detail"),
-                paths: [h("Library/Developer/Xcode/DerivedData")],
-                risk: .safe,
-                action: .moveContentsToTrash,
-                defaultSelected: false,
-                category: .xcode,
-                systemImage: "hammer"
-            ),
-            CleanupTargetDefinition(
-                id: "xcode-devicesupport",
-                name: L("cleanup.xcode-devicesupport.name"),
-                detail: L("cleanup.xcode-devicesupport.detail"),
-                paths: [
-                    h("Library/Developer/Xcode/iOS DeviceSupport"),
-                    h("Library/Developer/Xcode/watchOS DeviceSupport"),
-                    h("Library/Developer/Xcode/tvOS DeviceSupport")
-                ],
-                risk: .caution,
-                action: .moveContentsToTrash,
-                defaultSelected: false,
-                category: .xcode,
-                systemImage: "iphone"
-            ),
-            CleanupTargetDefinition(
-                id: "xcode-archives",
-                name: L("cleanup.xcode-archives.name"),
-                detail: L("cleanup.xcode-archives.detail"),
-                paths: [h("Library/Developer/Xcode/Archives")],
-                risk: .viewOnly,
-                action: .viewOnly,
-                defaultSelected: false,
-                category: .xcode,
-                systemImage: "archivebox"
-            ),
-            CleanupTargetDefinition(
-                id: "simulator-caches",
-                name: L("cleanup.simulator-caches.name"),
-                detail: L("cleanup.simulator-caches.detail"),
-                paths: [h("Library/Developer/CoreSimulator/Caches")],
-                risk: .safe,
-                action: .moveContentsToTrash,
-                defaultSelected: false,
-                category: .xcode,
-                systemImage: "square.stack.3d.up"
-            ),
-            CleanupTargetDefinition(
-                id: "logs",
-                name: L("cleanup.logs.name"),
-                detail: L("cleanup.logs.detail"),
-                paths: [h("Library/Logs")],
-                risk: .caution,
-                action: .moveContentsToTrash,
-                defaultSelected: false,
-                category: .system,
-                systemImage: "doc.text"
-            ),
-            CleanupTargetDefinition(
-                id: "trash",
-                name: L("cleanup.trash.name"),
-                detail: L("cleanup.trash.detail"),
-                paths: [h(".Trash")],
-                risk: .permanent,
-                action: .emptyTrashPermanently,
-                defaultSelected: false,
-                category: .system,
-                systemImage: "trash"
-            ),
-            CleanupTargetDefinition(
-                id: "npm",
-                name: L("cleanup.npm.name"),
-                detail: "~/.npm/_cacache",
-                paths: [h(".npm/_cacache")],
-                risk: .safe,
-                action: .moveContentsToTrash,
-                defaultSelected: false,
-                category: .packageManager,
-                systemImage: "cube.box"
-            ),
-            CleanupTargetDefinition(
-                id: "yarn",
-                name: L("cleanup.yarn.name"),
-                detail: "~/Library/Caches/Yarn",
-                paths: [h("Library/Caches/Yarn")],
-                risk: .safe,
-                action: .moveContentsToTrash,
-                defaultSelected: false,
-                category: .packageManager,
-                systemImage: "cube.box"
-            ),
-            CleanupTargetDefinition(
-                id: "pip",
-                name: L("cleanup.pip.name"),
-                detail: "~/Library/Caches/pip",
-                paths: [h("Library/Caches/pip")],
-                risk: .safe,
-                action: .moveContentsToTrash,
-                defaultSelected: false,
-                category: .packageManager,
-                systemImage: "cube.box"
-            ),
-            CleanupTargetDefinition(
-                id: "homebrew",
-                name: L("cleanup.homebrew.name"),
-                detail: L("cleanup.homebrew.detail"),
-                paths: [h("Library/Caches/Homebrew")],
-                risk: .external,
-                action: .externalTool,
-                defaultSelected: false,
-                category: .packageManager,
-                systemImage: "terminal"
-            ),
-            CleanupTargetDefinition(
-                id: "cocoapods",
-                name: L("cleanup.cocoapods.name"),
-                detail: "~/Library/Caches/CocoaPods",
-                paths: [h("Library/Caches/CocoaPods")],
-                risk: .safe,
-                action: .moveContentsToTrash,
-                defaultSelected: false,
-                category: .packageManager,
-                systemImage: "cube.box"
-            ),
-            CleanupTargetDefinition(
-                id: "gradle",
-                name: L("cleanup.gradle.name"),
-                detail: "~/.gradle/caches",
-                paths: [h(".gradle/caches")],
-                risk: .safe,
-                action: .moveContentsToTrash,
-                defaultSelected: false,
-                category: .packageManager,
-                systemImage: "cube.box"
-            )
-        ]
+        CleanupCatalog.definitions(homeDirectory: homeDirectory)
     }
 
-    /// 兼容修复页现有接口；系统清理页使用不可变 definition + scan report。
+    /// 旧版可变目标列表。系统清理页使用不可变 definition + scan report。
     public static func makeTargets() -> [CleanupTarget] {
         definitions().map {
             CleanupTarget(id: $0.id, name: $0.name, detail: $0.detail, paths: $0.paths)
@@ -301,50 +117,185 @@ public enum CleanupService {
         )
     }
 
+    public static func makeScanPlan(
+        seedDefinitions: [CleanupTargetDefinition]? = nil,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        packageResolver: CleanupPackageCacheResolver = .live,
+        fullDiskAccessProbe: CleanupFullDiskAccessProbe = .live
+    ) -> CleanupScanPlan {
+        CleanupDiscovery.makeScanPlan(
+            seed: seedDefinitions ?? definitions(homeDirectory: homeDirectory),
+            homeDirectory: homeDirectory,
+            packageResolver: packageResolver,
+            fullDiskAccessProbe: fullDiskAccessProbe
+        )
+    }
+
+    public static func scan(
+        plan: CleanupScanPlan,
+        cancellation: @Sendable () -> Bool = { false },
+        progress: @Sendable (CleanupProgress) -> Void = { _ in }
+    ) -> CleanupScanReport {
+        let report = scan(
+            definitions: plan.definitions,
+            policy: plan.policy,
+            cancellation: cancellation,
+            progress: progress
+        )
+        guard !plan.blockedItems.isEmpty else { return report }
+        return CleanupScanReport(
+            items: report.items + plan.blockedItems,
+            cancelled: report.cancelled,
+            scannedAt: report.scannedAt
+        )
+    }
+
     public static func scan(
         definitions: [CleanupTargetDefinition],
         policy: CleanupPathPolicy,
         cancellation: @Sendable () -> Bool = { false },
         progress: @Sendable (CleanupProgress) -> Void = { _ in }
     ) -> CleanupScanReport {
-        var items: [CleanupScanItem] = []
-        var wasCancelled = false
+        let total = definitions.count
+        guard total > 0 else {
+            return CleanupScanReport(items: [], cancelled: false)
+        }
 
-        for (index, definition) in definitions.enumerated() {
-            if cancellation() {
-                wasCancelled = true
-                items.append(
-                    contentsOf: definitions[index...].map {
-                        CleanupScanItem(definition: $0, status: .cancelled, validatedPaths: [])
-                    }
-                )
-                break
+        final class Box: @unchecked Sendable {
+            let lock = NSLock()
+            var slots: [CleanupScanItem?]
+            var completed = 0
+            var wasCancelled = false
+
+            init(count: Int) {
+                slots = Array(repeating: nil, count: count)
             }
 
+            func shouldStop(_ external: @Sendable () -> Bool) -> Bool {
+                lock.lock()
+                defer { lock.unlock() }
+                if external() { wasCancelled = true }
+                return wasCancelled
+            }
+
+            func finish(_ item: CleanupScanItem, at index: Int) -> Int {
+                lock.lock()
+                slots[index] = item
+                if item.status == .cancelled { wasCancelled = true }
+                completed += 1
+                let done = completed
+                lock.unlock()
+                return done
+            }
+        }
+
+        let box = Box(count: total)
+        DispatchQueue.concurrentPerform(iterations: total) { index in
+            let definition = definitions[index]
+            if box.shouldStop(cancellation) {
+                _ = box.finish(
+                    CleanupScanItem(definition: definition, status: .cancelled, validatedPaths: []),
+                    at: index
+                )
+                return
+            }
+
+            let item: CleanupScanItem
+            if definition.action == .externalTool {
+                item = CleanupScanItem(
+                    definition: definition,
+                    status: .excluded(L("cleanup.status.external-excluded")),
+                    validatedPaths: []
+                )
+            } else {
+                item = scan(
+                    definition: definition,
+                    policy: policy,
+                    cancellation: { box.shouldStop(cancellation) }
+                )
+            }
+            let done = box.finish(item, at: index)
+            box.lock.lock()
             progress(
                 CleanupProgress(
                     targetID: definition.id,
                     targetName: definition.name,
-                    index: index + 1,
-                    total: definitions.count
+                    index: done,
+                    total: total
                 )
             )
-
-            if definition.action == .externalTool {
-                items.append(
-                    CleanupScanItem(
-                        definition: definition,
-                        status: .excluded(L("cleanup.status.external-excluded")),
-                        validatedPaths: []
-                    )
-                )
-                continue
-            }
-
-            items.append(scan(definition: definition, policy: policy, cancellation: cancellation))
+            box.lock.unlock()
         }
 
-        return CleanupScanReport(items: items, cancelled: wasCancelled)
+        let items = CleanupDiscovery.coalesceSmallDynamicCaches(
+            box.slots.compactMap { $0 }.filter { !CleanupDiscovery.shouldOmitDynamicItem($0) }
+        )
+        return CleanupScanReport(items: items, cancelled: box.wasCancelled)
+    }
+
+    /// 一行展开时看最大的几个子项。只读，不跟随符号链接，拒绝名单内的跳过。
+    public static func largestChildren(
+        of item: CleanupScanItem,
+        limit: Int = 5,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> [CleanupBreakdownEntry] {
+        var entries: [CleanupBreakdownEntry] = []
+        let directoryRoots = item.validatedPaths.filter(\.isDirectory)
+        if directoryRoots.count > 1 {
+            for root in directoryRoots {
+                if CleanupDeniedPaths.contains(root.canonicalURL, homeDirectory: homeDirectory) { continue }
+                let measured = measure(
+                    root: root,
+                    homeDirectory: homeDirectory,
+                    cancellation: { false }
+                )
+                if measured.bytes > 0 {
+                    entries.append(
+                        CleanupBreakdownEntry(
+                            name: root.canonicalURL.lastPathComponent,
+                            bytes: measured.bytes,
+                            url: root.canonicalURL
+                        )
+                    )
+                }
+            }
+            return Array(entries.sorted { $0.bytes > $1.bytes }.prefix(limit))
+        }
+        for root in directoryRoots {
+            let children = CleanupDiscovery.listChildren(of: root.canonicalURL)
+            for child in children {
+                if CleanupDeniedPaths.contains(child, homeDirectory: homeDirectory) { continue }
+                guard CleanupDiscovery.realDirectory(child) != nil || FileManager.default.fileExists(atPath: child.path) else {
+                    continue
+                }
+                var info = stat()
+                guard lstat(child.path, &info) == 0 else { continue }
+                if (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFLNK) { continue }
+                let measured = measure(
+                    root: CleanupValidatedPath(
+                        requestedURL: child,
+                        canonicalURL: child.standardizedFileURL,
+                        identity: CleanupFileIdentity(
+                            device: UInt64(info.st_dev),
+                            inode: UInt64(info.st_ino)
+                        ),
+                        isDirectory: (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFDIR)
+                    ),
+                    homeDirectory: homeDirectory,
+                    cancellation: { false }
+                )
+                if measured.bytes > 0 {
+                    entries.append(
+                        CleanupBreakdownEntry(
+                            name: child.lastPathComponent,
+                            bytes: measured.bytes,
+                            url: child
+                        )
+                    )
+                }
+            }
+        }
+        return Array(entries.sorted { $0.bytes > $1.bytes }.prefix(limit))
     }
 
     public static func execute(
@@ -353,6 +304,7 @@ public enum CleanupService {
         policy: CleanupPathPolicy,
         allowPermanentTrash: Bool,
         actions: CleanupFileActions = .live,
+        runtimeGuard: CleanupRuntimeGuard = .live,
         cancellation: @Sendable () -> Bool = { false },
         progress: @Sendable (CleanupProgress) -> Void = { _ in }
     ) -> CleanupExecutionSummary {
@@ -393,6 +345,7 @@ public enum CleanupService {
                     policy: policy,
                     allowPermanentTrash: allowPermanentTrash,
                     actions: actions,
+                    runtimeGuard: runtimeGuard,
                     cancellation: cancellation,
                     processedRoots: &processedRoots
                 )
@@ -405,18 +358,18 @@ public enum CleanupService {
         return CleanupExecutionSummary(results: results, cancelled: wasCancelled)
     }
 
-    /// 计算目标占用的总字节数（兼容修复页）。
+    /// 计算目标占用的总字节数。
     public static func computeSize(_ target: CleanupTarget) -> Int64 {
         size(ofPaths: target.paths)
     }
 
-    /// 计算一组路径的总占用（兼容修复页，错误按 0 处理）。
+    /// 计算一组路径的总占用（错误按 0 处理）。
     public static func size(ofPaths paths: [URL]) -> Int64 {
         paths.filter { FileManager.default.fileExists(atPath: $0.path) }
             .reduce(0) { $0 + FileSystemHelper.size(at: $1) }
     }
 
-    /// 兼容修复页：普通路径统一移入废纸篓，不再静默永久删除。
+    /// 普通路径统一移入废纸篓，不再静默永久删除。
     @discardableResult
     public static func cleanPaths(_ paths: [URL]) -> Int64 {
         let definition = CleanupTargetDefinition(
@@ -453,6 +406,7 @@ public enum CleanupService {
         var errors: [String] = []
         var missingCount = 0
         var rootPermissionCount = 0
+        var deniedCount = 0
         var childPermissionHits = 0
 
         for path in definition.paths {
@@ -472,7 +426,7 @@ public enum CleanupService {
                     continue
                 }
                 validated.append(root)
-                let measured = measure(root: root, cancellation: cancellation)
+                let measured = measure(root: root, homeDirectory: policy.homeDirectory, cancellation: cancellation)
                 total += measured.bytes
                 errors.append(contentsOf: measured.errors)
                 childPermissionHits += measured.permissionHits
@@ -485,6 +439,9 @@ public enum CleanupService {
                 }
             } catch CleanupPathError.missing {
                 missingCount += 1
+            } catch CleanupPathError.denied {
+                deniedCount += 1
+                errors.append(L("cleanup.message.denied-skipped", path.lastPathComponent))
             } catch CleanupPathError.permissionDenied {
                 rootPermissionCount += 1
                 errors.append(L("cleanup.message.no-read-permission", path.lastPathComponent))
@@ -496,9 +453,15 @@ public enum CleanupService {
         // 多路径目标中部分路径不存在属于正常情况（例如没有 watchOS 设备支持），
         // 只有真实错误才降级为 partial。
         let status: CleanupScanStatus
-        if missingCount == definition.paths.count {
+        if definition.paths.isEmpty {
             status = .missing
-        } else if rootPermissionCount + missingCount == definition.paths.count && rootPermissionCount > 0 {
+        } else if deniedCount == definition.paths.count {
+            status = .excluded(L("cleanup.status.denied-excluded"))
+        } else if missingCount + deniedCount == definition.paths.count {
+            status = .missing
+        } else if missingCount == definition.paths.count {
+            status = .missing
+        } else if rootPermissionCount + missingCount + deniedCount == definition.paths.count && rootPermissionCount > 0 {
             status = .permissionDenied(errors.first ?? L("cleanup.message.no-read-permission.generic"))
         } else if childPermissionHits > 0 && total == 0 && rootPermissionCount == 0 {
             // 目录本身能 stat,但子项被 TCC 挡住:绝不能显示成「空 / 0 B」。
@@ -516,6 +479,7 @@ public enum CleanupService {
     /// 枚举器不跟随符号链接，因此这里无需再对每个后代做 realpath 检查。
     private static func measure(
         root: CleanupValidatedPath,
+        homeDirectory: URL,
         cancellation: @Sendable () -> Bool
     ) -> (bytes: Int64, errors: [String], cancelled: Bool, permissionHits: Int) {
         if !root.isDirectory {
@@ -528,8 +492,10 @@ public enum CleanupService {
         var total: Int64 = 0
         var errors: [String] = []
         var permissionHits = 0
+        var seenInodes = Set<CleanupFileIdentity>()
         let keys: [URLResourceKey] = [
             .isRegularFileKey,
+            .isDirectoryKey,
             .isSymbolicLinkKey,
             .fileAllocatedSizeKey,
             .totalFileAllocatedSizeKey,
@@ -551,6 +517,10 @@ public enum CleanupService {
         let keySet = Set(keys)
         for case let url as URL in enumerator {
             if cancellation() { return (total, errors, true, permissionHits) }
+            if CleanupDeniedPaths.contains(url, homeDirectory: homeDirectory) {
+                enumerator.skipDescendants()
+                continue
+            }
             guard let values = try? url.resourceValues(forKeys: keySet) else {
                 errors.append(L("cleanup.message.attributes-unreadable", url.lastPathComponent))
                 continue
@@ -560,6 +530,10 @@ public enum CleanupService {
                 continue
             }
             if values.isRegularFile == true {
+                // 同一棵树里的硬链接只计一次，避免 pnpm / Cargo store 把可释放空间算炸。
+                if let identity = fileIdentity(at: url), !seenInodes.insert(identity).inserted {
+                    continue
+                }
                 total += Int64(
                     values.totalFileAllocatedSize
                         ?? values.fileAllocatedSize
@@ -582,6 +556,7 @@ public enum CleanupService {
         policy: CleanupPathPolicy,
         allowPermanentTrash: Bool,
         actions: CleanupFileActions,
+        runtimeGuard: CleanupRuntimeGuard,
         cancellation: @Sendable () -> Bool,
         processedRoots: inout [CleanupValidatedPath]
     ) -> CleanupItemResult {
@@ -602,6 +577,16 @@ public enum CleanupService {
                 outcome: .skipped,
                 processedBytes: 0,
                 messages: [L("cleanup.message.trash-needs-confirmation")]
+            )
+        }
+        if definition.action == .moveContentsToTrash,
+           let reason = runtimeGuard.skipReason(for: definition) {
+            return CleanupItemResult(
+                targetID: item.id,
+                targetName: definition.name,
+                outcome: .skipped,
+                processedBytes: 0,
+                messages: [reason]
             )
         }
 
@@ -679,7 +664,27 @@ public enum CleanupService {
                             throw CleanupPathError.outsideAllowedRoots
                         }
                         try policy.revalidate(candidate)
-                        let measurement = measure(root: candidate, cancellation: cancellation)
+                        if definition.action == .moveContentsToTrash {
+                            switch runtimeGuard.isSQLiteFamilyBusy(candidate.canonicalURL) {
+                            case true:
+                                messages.append(
+                                    L("cleanup.message.sqlite-busy", candidateURL.lastPathComponent)
+                                )
+                                continue
+                            case nil:
+                                messages.append(
+                                    L("cleanup.message.sqlite-unknown", candidateURL.lastPathComponent)
+                                )
+                                continue
+                            case false:
+                                break
+                            }
+                        }
+                        let measurement = measure(
+                            root: candidate,
+                            homeDirectory: policy.homeDirectory,
+                            cancellation: cancellation
+                        )
                         if measurement.cancelled {
                             return CleanupItemResult(
                                 targetID: item.id,
@@ -709,6 +714,8 @@ public enum CleanupService {
                         messages.append(L("cleanup.message.gone-before-processing", candidateURL.lastPathComponent))
                     } catch CleanupPathError.symbolicLink {
                         messages.append(L("cleanup.message.symlink-skipped", candidateURL.lastPathComponent))
+                    } catch CleanupPathError.denied {
+                        messages.append(L("cleanup.message.denied-skipped", candidateURL.lastPathComponent))
                     } catch {
                         failures += 1
                         messages.append(L("cleanup.message.detail", candidateURL.lastPathComponent, error.localizedDescription))
@@ -716,6 +723,8 @@ public enum CleanupService {
                 }
             } catch CleanupPathError.missing {
                 messages.append(L("cleanup.message.path-missing", requestedRoot.lastPathComponent))
+            } catch CleanupPathError.denied {
+                messages.append(L("cleanup.message.denied-skipped", requestedRoot.lastPathComponent))
             } catch {
                 failures += 1
                 messages.append(L("cleanup.message.detail", requestedRoot.lastPathComponent, error.localizedDescription))
@@ -741,6 +750,12 @@ public enum CleanupService {
             processedBytes: processed,
             messages: messages
         )
+    }
+
+    private static func fileIdentity(at url: URL) -> CleanupFileIdentity? {
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else { return nil }
+        return CleanupFileIdentity(device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
     }
 
     private static func allocatedSize(at url: URL) -> Int64? {
