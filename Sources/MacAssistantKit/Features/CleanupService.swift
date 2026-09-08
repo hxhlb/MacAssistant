@@ -665,19 +665,19 @@ public enum CleanupService {
                         }
                         try policy.revalidate(candidate)
                         if definition.action == .moveContentsToTrash {
-                            switch runtimeGuard.isSQLiteFamilyBusy(candidate.canonicalURL) {
-                            case true:
-                                messages.append(
-                                    L("cleanup.message.sqlite-busy", candidateURL.lastPathComponent)
-                                )
-                                continue
-                            case nil:
+                            // Bool? 在 Swift 5.10 上不能用 true/false/nil 穷尽 switch。
+                            if let busy = runtimeGuard.isSQLiteFamilyBusy(candidate.canonicalURL) {
+                                if busy {
+                                    messages.append(
+                                        L("cleanup.message.sqlite-busy", candidateURL.lastPathComponent)
+                                    )
+                                    continue
+                                }
+                            } else {
                                 messages.append(
                                     L("cleanup.message.sqlite-unknown", candidateURL.lastPathComponent)
                                 )
                                 continue
-                            case false:
-                                break
                             }
                         }
                         let measurement = measure(

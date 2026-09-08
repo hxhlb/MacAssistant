@@ -252,19 +252,28 @@ public enum AppCloneService {
     }
 
     public static func installedApps() -> [URL] {
+        let fileManager = FileManager.default
         let directories = [
             URL(fileURLWithPath: "/Applications", isDirectory: true),
-            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications", isDirectory: true),
+            fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Applications", isDirectory: true),
         ]
-        return directories.flatMap { directory in
-            (try? FileManager.default.contentsOfDirectory(
+        var apps: [URL] = []
+        for directory in directories {
+            let contents = (try? fileManager.contentsOfDirectory(
                 at: directory,
                 includingPropertiesForKeys: [.isDirectoryKey],
                 options: [.skipsHiddenFiles]
             )) ?? []
+            for url in contents where url.pathExtension.lowercased() == "app" {
+                if FileSystemHelper.isDirectory(url) {
+                    apps.append(url)
+                }
+            }
         }
-        .filter { $0.pathExtension.lowercased() == "app" && FileSystemHelper.isDirectory($0) }
-        .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        apps.sort {
+            $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
+        }
+        return apps
     }
 
     // MARK: - Validation / recipe
